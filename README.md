@@ -7,7 +7,7 @@ Send books and documents to your Kindle from Windows Explorer. Select one or mor
 **Send to Kindle**, and get back to reading. Voltura Books is a small native Windows
 app with no library to manage and no background service.
 
-![Voltura Books sending window with an EPUB cover](docs/assets/sending.png)
+<img src="docs/assets/sending-native.png" width="735" alt="Voltura Books sending window with an EPUB cover">
 
 *App preview featuring a public-domain edition of Alice’s Adventures in Wonderland.
 [Edition and artwork credit](docs/credits.md).*
