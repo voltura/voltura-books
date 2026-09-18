@@ -1,0 +1,2 @@
+#pragma once
+#define BOOKS_VERSION L"@PROJECT_VERSION@"

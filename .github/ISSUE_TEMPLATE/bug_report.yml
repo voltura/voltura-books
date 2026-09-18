@@ -1,0 +1,78 @@
+name: Bug report
+description: Report a reproducible Voltura Books problem.
+title: "[Bug]: "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: Remove private information from screenshots. Never include passwords or private book contents.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Sending or delivery
+        - Book browsing, covers, or details
+        - Explorer right-click menu
+        - Appearance or accessibility
+        - Email or server settings
+        - Installation or removal
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: Voltura Books version
+      description: Copy the version from Windows Installed apps or the installer title.
+    validations:
+      required: true
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+      description: Include the version and build shown by winver.
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation type
+      options:
+        - Installer
+        - Unpacked ZIP
+        - Built from source
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: sending-settings
+    attributes:
+      label: Sending method and file type
+      description: Include the file type, approximate size, and direct sending or email provider. Do not include passwords or email addresses.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Give the shortest repeatable sequence, including the starting state.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Include visible error text when available.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Screenshots and additional context
+      description: For display problems, include monitor scaling and layout. Remove private information before attaching screenshots.

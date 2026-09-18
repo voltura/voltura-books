@@ -1,0 +1,16 @@
+/build/
+/.cache/
+/dist/
+/.vs/
+__pycache__/
+*.pyc
+*.user
+*.suo
+*.pdb
+.env
+.env.*
+*.key
+*.pem
+!/src/update-signing-public.pem
+/docs/_site/
+/docs/.jekyll-cache/
