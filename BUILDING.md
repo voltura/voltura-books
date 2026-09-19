@@ -86,15 +86,15 @@ No arguments opens the book window. Explorer passes file selections to an out-of
 
 ```powershell
 pwsh ./scripts/release.ps1 -PrepareOnly -InteractiveTests
-pwsh ./scripts/release.ps1 -InteractiveTests
+pwsh ./scripts/release.ps1 -Version 0.1.4 -InteractiveTests
 ```
 
 Release preparation requires `-InteractiveTests` to explicitly opt into its full
 release validation on an available desktop. Prepare-only builds, runs all C++ and SMTP/cover checks, packages the installer and ZIP, signs the update manifest, verifies it with the native updater, and writes SHA-256 checksums under `dist/releases/<version>/`. It does not publish or need Git history.
 
-Publication requires a clean committed `main`, origin pointing to public `voltura/voltura-books`, and authenticated GitHub CLI. It pushes the exact commit, creates a draft with `docs/releases/<version>.md`, downloads and verifies every asset, and then publishes as Latest. It never stages or commits automatically, replaces a release, or overwrites a tag. If publication fails after creating the draft, inspect the draft before retrying.
+Publication requires a clean committed `main`, origin pointing to public `voltura/voltura-books`, and authenticated GitHub CLI. Create and commit `docs/releases/<version>.md`, then pass that version with `-Version`. The script updates the four release-owned version declarations, validates and packages the result, and creates a separate `Release Voltura Books <version>` commit containing only those declarations. It pushes that exact commit, creates the draft release, downloads and verifies every asset, and then publishes as Latest. It never replaces a release or overwrites a tag. If publication fails before the version commit, it restores the metadata files; if it fails after creating a draft, inspect the retained commit and draft before retrying.
 
-The version defaults to CMakeLists.txt. Update CMakeLists.txt, src/app.rc, src/app.manifest, and src/integration.cpp together for a new version. The installer and About window derive their versions from CMake. Write the versioned release notes before preparation. `-Version` optionally asserts the checked-in version. Preparation refuses an existing output directory; move previous output aside before preparing again.
+For publication, `-Version` accepts the checked-in version when resuming an interrupted release or any higher stable `X.Y.Z` version. It updates CMakeLists.txt, src/app.rc, src/app.manifest, and src/integration.cpp together. The installer and About window derive their versions from CMake. Prepare-only retains the checked-in version and does not create a commit. Preparation refuses an existing output directory; move previous output aside before preparing again.
 
 For first publication, review the source and ignored files, create an initial Git commit on main, and create the public repository with `gh repo create voltura/voltura-books --public --source . --remote origin`. Run release.ps1 when ready to push and publish. Enable Pages with GitHub Actions and run Deploy website after the first push.
 
