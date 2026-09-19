@@ -25,7 +25,7 @@ VIAddVersionKey /LANG=1033 "Comments" "Developer: Joakim Skoglund; Website: http
 !define MUI_ICON "..\src\book.ico"
 !define MUI_WELCOMEFINISHPAGE_BITMAP "..\src\installer-banner.bmp"
 !define MUI_WELCOMEFINISHPAGE_BITMAP_STRETCH FitControl
-!define MUI_WELCOMEPAGE_TEXT "Install Send to Kindle for books and documents in your Windows account.$\r$\n$\r$\nYour default EPUB reader stays unchanged. Configure your own Kindle address and sender email address after installation."
+!define MUI_WELCOMEPAGE_TEXT "Browse, preview, read, and send your books and documents from Windows.$\r$\n$\r$\nOpen folders from File Explorer, view covers and details, read supported formats in full screen, and send one or several files to your Kindle.$\r$\n$\r$\nVoltura Books installs for your Windows account and leaves your default apps unchanged. Configure your Kindle address and preferred sending method after installation."
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$LOCALAPPDATA\Programs\Voltura Books\VolturaBooks.exe"
