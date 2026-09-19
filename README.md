@@ -4,7 +4,7 @@
 <p align="center"><a href="https://github.com/voltura/voltura-books/releases">Download for Windows</a> · <a href="https://voltura.github.io/voltura-books/">Website</a> · <a href="https://github.com/voltura/voltura-books/issues">Help & feedback</a></p>
 
 Send books and documents to your Kindle from Windows Explorer. Select one or more, right-click, and choose
-**Send to Kindle**, and get back to reading. Voltura Books is a small native Windows
+**Send to Kindle with Voltura Books**, and get back to reading. Voltura Books is a small native Windows
 app with no library to manage and no background service.
 
 <img src="docs/assets/sending-native.png" width="735" alt="Voltura Books sending window with an EPUB cover">
@@ -14,7 +14,8 @@ app with no library to manage and no background service.
 
 ## Made for one simple job
 
-- **Two easy ways to send.** Right-click your books, or open Voltura Books - Send a book from Start and drop your books into the window.
+- **Two easy ways to send.** Right-click your books and choose **Send to Kindle with Voltura Books**, or open Voltura Books - Send a book from Start and drop your books into the window.
+- **Browse from Explorer.** Right-click a folder and choose **Browse with Voltura Books** to open that folder in Browse books.
 - **Your choice of sending method.** Use your email provider or send directly without an email password.
 - **A familiar Windows interface.** Light and dark themes, with Per-Monitor V2 display scaling.
 - **Book details at a glance.** See the cover or preview, filename, readable file size, full format name, and available title, author, publisher, and page count. Missing covers use a full-size placeholder.
@@ -27,14 +28,15 @@ app with no library to manage and no background service.
 2. Open **Voltura Books - Settings** and enter your Kindle email and sender email.
 3. Choose a sending method and save. If you use your email provider, enter its email password or the app password described in the form.
 4. Add your sender email to Amazon's **Approved Personal Document E-mail List** in [Content and Devices](https://www.amazon.com/hz/mycd/myx).
-5. Right-click an `.epub` → **Show more options** → **Send to Kindle**. If Windows already shows the classic menu, choose **Send to Kindle** directly.
+5. Right-click a supported file → **Show more options** → **Send to Kindle with Voltura Books**. If Windows already shows the classic menu, choose it directly.
+6. To browse a folder instead, right-click the folder → **Show more options** → **Browse with Voltura Books**.
 
 Find your Kindle email in Amazon's Content and Devices settings. Your sender email
 is the address the book comes from; your Kindle email is where it goes.
 
 Installation is for your Windows account and does not change your default EPUB reader.
 Open **Voltura Books - Send a book** from Start to drag and drop one or more books, or select **Choose files…**.
-Open **Voltura Books - Browse books** from Start (or run `VolturaBooks.exe --browse`) to go straight to browsing and reading. **Send book(s)** uses the same sending flow. **Close** exits browsing without opening the sending window or sending anything, including when browsing was opened from **Browse folder…**. Use `--browse --test-sending` to open directly with simulated sending enabled.
+Open **Voltura Books - Browse books** from Start (or run `VolturaBooks.exe --browse`) to go straight to browsing and reading. You can also right-click a folder in Explorer and choose **Show more options → Browse with Voltura Books**; the folder opens in Browse books and becomes the remembered browse folder. If Browse books is already open, it switches to the folder in the same window. **Send book(s)** uses the same sending flow. **Close** exits browsing without opening the sending window or sending anything, including when browsing was opened from **Browse folder…**. Use `--browse --test-sending` to open directly with simulated sending enabled, or `--browse "C:\Books"` to open a particular folder.
 Browsing tries the previous folder, Downloads, then Documents. If none can be read, it opens the folder picker first; cancelling exits without sending anything.
 To try the app without sending anything, select **Don’t send emails** in the Send a book window. **Test sending** simulates sending, needs no email setup, and leaves sent-book history unchanged. It resets when you close the app.
 

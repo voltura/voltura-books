@@ -29,7 +29,15 @@ static constexpr UINT BrowseRequest=WM_APP+72;
 static HWND dropWindow=nullptr;
 static bool sendingQueue=false,confirmingIncoming=false;
 static std::vector<fs::path> pendingFiles;
+static fs::path pendingBrowseFolder;
 static std::vector<std::unique_ptr<std::vector<fs::path>>> deferredRequests;
+static std::wstring browseFolderError(const fs::path& folder) {
+    std::error_code error;
+    if(folder.empty() || !fs::is_directory(folder,error) || error)return L"Choose an existing folder to browse.";
+    fs::directory_iterator probe(folder,error);
+    if(error)return L"Voltura Books cannot read this folder.";
+    return {};
+}
 static HWND foregroundDialog() {
     HWND target=nullptr;
     EnumThreadWindows(GetCurrentThreadId(),[](HWND window,LPARAM value)->BOOL {
@@ -42,6 +50,19 @@ static HWND foregroundDialog() {
 static LRESULT CALLBACK instanceProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
     if(message==WM_COPYDATA) {
         auto data=reinterpret_cast<const COPYDATASTRUCT*>(lp);
+        if(data && data->dwData==3) {
+            if(!data->lpData || data->cbData<sizeof(wchar_t) || data->cbData>65536 || data->cbData%sizeof(wchar_t))return FALSE;
+            auto text=static_cast<const wchar_t*>(data->lpData);size_t count=data->cbData/sizeof(wchar_t);
+            if(text[count-1] || wcsnlen(text,count)!=count-1)return FALSE;
+            fs::path folder(std::wstring(text,count-1));
+            if(!browseFolderError(folder).empty())return FALSE;
+            if(navigateBrowseBooks(folder))return TRUE;
+            const bool launcherReady=dropWindow && IsWindowVisible(dropWindow) && IsWindowEnabled(dropWindow);
+            foregroundDialog();
+            if(!launcherReady)return 3;
+            pendingBrowseFolder=std::move(folder);
+            return PostMessageW(dropWindow,BrowseRequest,FALSE,0);
+        }
         if(data && data->dwData==2) {
             if(data->cbData!=sizeof(DWORD) || !data->lpData)return FALSE;
             DWORD testSending=0;memcpy(&testSending,data->lpData,sizeof(testSending));
@@ -678,7 +699,13 @@ static INT_PTR CALLBACK dropProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             if(!IsWindowEnabled(window))return TRUE;
             CheckDlgButton(window,IDC_PREVIEW_MODE,wp ? BST_CHECKED : BST_UNCHECKED);
             SendMessageW(window,WM_COMMAND,IDC_PREVIEW_MODE,0);
-            SendMessageW(window,WM_COMMAND,IDC_BROWSE_FOLDER,0);
+            auto folder=pendingBrowseFolder;pendingBrowseFolder.clear();
+            if(folder.empty())SendMessageW(window,WM_COMMAND,IDC_BROWSE_FOLDER,0);
+            else {
+                auto selection=browseBooks(window,folder,previewOnly,true);
+                if(!selection.empty()){*path=std::move(selection);EndDialog(window,IDOK);}
+                else EndDialog(window,IDCANCEL);
+            }
             return TRUE;
         }
         if(message==IncomingFiles && path && !pendingFiles.empty()) {
@@ -770,13 +797,21 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     if(!args) { curl_global_cleanup(); if(SUCCEEDED(com)) CoUninitialize(); return 1; }
     std::vector<std::wstring> argv(args,args+argc); LocalFree(args);
     std::vector<fs::path> launchFiles;
+    fs::path launchFolder;
+    const bool browse=argc>=2 && argv[1]==L"--browse";
     try {
+        if(browse && !(argc==2 || (argc==3 && (argv[2]==L"--test-sending" || !argv[2].empty()))))
+            throw std::runtime_error("Use --browse, --browse \"folder\", or --browse --test-sending.");
         if(argc>=3 && argv[1]==L"--send") for(int i=2;i<argc;++i) launchFiles.emplace_back(argv[i]);
         else if(argc>=2 && argv[1]==L"--shell") launchFiles=receiveShellSelection();
+        else if(browse && argc==3 && argv[2]!=L"--test-sending") {
+            launchFolder=argv[2];
+            if(auto validation=browseFolderError(launchFolder);!validation.empty())throw std::runtime_error(utf8(validation));
+        }
     } catch(const std::exception& e) { error(nullptr,wide(e.what())); curl_global_cleanup(); if(SUCCEEDED(com)) CoUninitialize(); return 1; }
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\VolturaBooks.Application");
     if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
-        bool delivered=false,modeConflict=false;
+        bool delivered=false,modeConflict=false,browseBusy=false;
         const bool maintenance=argc==2 && (argv[1]==L"--install" || argv[1]==L"--uninstall");
         if(mutex && !maintenance) {
             HWND existing=nullptr;
@@ -788,15 +823,17 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 if(payload.size()*sizeof(wchar_t)<=1024*1024) {
                     COPYDATASTRUCT data{1,static_cast<DWORD>(payload.size()*sizeof(wchar_t)),payload.data()}; DWORD_PTR reply=0;
                     DWORD testSending=argc==3 && argv[2]==L"--test-sending";
-                    const bool browse=argc>=2 && argv[1]==L"--browse";
-                    if(browse)data={2,sizeof(testSending),&testSending};
+                    auto folderText=launchFolder.wstring();
+                    if(!launchFolder.empty())data={3,static_cast<DWORD>((folderText.size()+1)*sizeof(wchar_t)),folderText.data()};
+                    else if(browse)data={2,sizeof(testSending),&testSending};
                     const bool responded=SendMessageTimeoutW(existing,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&data),SMTO_ABORTIFHUNG|SMTO_BLOCK,5000,&reply)!=0;
                     modeConflict=responded && browse && reply==2;
+                    browseBusy=responded && !launchFolder.empty() && reply==3;
                     delivered=responded && reply==TRUE;
                 }
             }
         }
-        if(!delivered) error(nullptr,modeConflict ? L"Voltura Books is already open in a different sending mode. Close it before opening Browse books in the requested mode." : maintenance ? L"Close Voltura Books before installing or removing it." : L"The open Voltura Books window is not responding. Close it and try again.");
+        if(!delivered) error(nullptr,browseBusy ? L"Voltura Books is busy with another operation. Finish or close it, then browse the folder again." : modeConflict ? L"Voltura Books is already open in a different sending mode. Close it before opening Browse books in the requested mode." : maintenance ? L"Close Voltura Books before installing or removing it." : L"The open Voltura Books window is not responding. Close it and try again.");
         if (mutex) CloseHandle(mutex); curl_global_cleanup(); if (SUCCEEDED(com)) CoUninitialize(); return delivered ? 0 : 1;
     }
     WNDCLASSW instanceType{}; instanceType.lpfnWndProc=instanceProc; instanceType.hInstance=GetModuleHandleW(nullptr); instanceType.lpszClassName=InstanceClass;
@@ -809,9 +846,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         else if (argc == 2 && argv[1] == L"--uninstall") uninstallApp();
         else if (argc == 2 && argv[1] == L"--settings") {
             auto s=loadSettings(); showSettings(nullptr,s);
-        } else if((argc==2 && argv[1]==L"--browse") || (argc==3 && argv[1]==L"--browse" && argv[2]==L"--test-sending")) {
-            previewOnly=argc==3;
-            result=sendSelectedBooks(browseBooks(nullptr,{},previewOnly));
+        } else if((argc==2 && argv[1]==L"--browse") || (argc==3 && argv[1]==L"--browse")) {
+            previewOnly=argc==3 && argv[2]==L"--test-sending";
+            result=sendSelectedBooks(browseBooks(nullptr,launchFolder,previewOnly,!launchFolder.empty()));
         } else if(argc==1 || (argc==2 && (argv[1]==L"--drop" || argv[1]==L"--test-sending"))) {
             previewOnly=argc==2 && argv[1]==L"--test-sending";
             std::vector<fs::path> path;
@@ -821,7 +858,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         } else if(argc>=3 && argv[1]==L"--send") {
             result=sendSelectedBooks(launchFiles);
         } else if(argc>=2 && argv[1]==L"--shell") result=sendSelectedBooks(launchFiles);
-        else throw std::runtime_error("Use --send \"book.epub\", --drop, --browse [--test-sending], --test-sending, --settings, --install, or --uninstall. You can select several books.");
+        else throw std::runtime_error("Use --send \"book.epub\", --drop, --browse [\"folder\"|--test-sending], --test-sending, --settings, --install, or --uninstall. You can select several books.");
         while(!pendingFiles.empty()) { auto next=std::move(pendingFiles); pendingFiles.clear(); result=sendSelectedBooks(std::move(next)); }
 
     } catch (const std::exception& e) { error(nullptr, wide(e.what())); result = 1; }

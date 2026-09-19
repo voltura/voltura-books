@@ -72,6 +72,7 @@ Open http://localhost:8080. The site is plain HTML and CSS without external font
 VolturaBooks.exe --send "C:\Books\My book.epub" "C:\Books\Another book.epub"
 VolturaBooks.exe --drop
 VolturaBooks.exe --browse
+VolturaBooks.exe --browse "C:\Books"
 VolturaBooks.exe --browse --test-sending
 VolturaBooks.exe --test-sending
 VolturaBooks.exe --settings
@@ -79,7 +80,7 @@ VolturaBooks.exe --install
 VolturaBooks.exe --uninstall
 ```
 
-No arguments opens the book window. Explorer passes selections to an out-of-process COM DropTarget through the internal `--shell` entry point, avoiding command-line length limits and a separate process per book.
+No arguments opens the book window. Explorer passes file selections to an out-of-process COM DropTarget through the internal `--shell` entry point, avoiding command-line length limits and a separate process per book. The classic folder command passes its selected filesystem folder to `--browse`; an existing Browse books window navigates to that folder instead of opening a second window.
 
 ## Release
 

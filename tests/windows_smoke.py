@@ -19,6 +19,7 @@ EXE = ROOT / "dist/VolturaBooks.exe"
 DATA = Path(os.environ["LOCALAPPDATA"]) / "Voltura Books"
 INSTALLED = Path(os.environ["LOCALAPPDATA"]) / "Programs/Voltura Books"
 KEY = r"Software\Classes\*\shell\VolturaBooks.Send"
+BROWSE_KEY = r"Software\Classes\Directory\shell\VolturaBooks.Browse"
 user = c.WinDLL("user32", use_last_error=True)
 kernel = c.WinDLL("kernel32", use_last_error=True)
 psapi = c.WinDLL("psapi", use_last_error=True)
@@ -220,9 +221,16 @@ def main():
         command = winreg.QueryValueEx(key, None)[0]
         assert command == f'"{INSTALLED / "VolturaBooks.exe"}" --send "%1"'
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, KEY) as key:
+        assert winreg.QueryValueEx(key, None)[0] == "Send to Kindle with Voltura Books"
         assert winreg.QueryValueEx(key, "MultiSelectModel")[0] == "Player"
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, KEY + r"\DropTarget") as key:
         assert winreg.QueryValueEx(key, "CLSID")[0] == "{F0D73B4A-36AE-40A5-A224-CFD826524030}"
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, BROWSE_KEY) as key:
+        assert winreg.QueryValueEx(key, None)[0] == "Browse with Voltura Books"
+        assert winreg.QueryValueEx(key, "MultiSelectModel")[0] == "Single"
+        assert winreg.QueryValueEx(key, "Icon")[0] == f'"{INSTALLED / "VolturaBooks.exe"}",0'
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, BROWSE_KEY + r"\command") as key:
+        assert winreg.QueryValueEx(key, None)[0] == f'"{INSTALLED / "VolturaBooks.exe"}" --browse "%1"'
     assert association() == initial_association
     assert (Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Voltura Books - Settings.lnk").exists()
     assert (Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Voltura Books - Send a book.lnk").exists()
@@ -255,6 +263,25 @@ def main():
         assert kernel.WaitForSingleObject(info.hProcess, 10000) == 0
         kernel.CloseHandle(info.hProcess)
     print("PASS Explorer shell verb launches the installed sender for a Unicode filename")
+    with tempfile.TemporaryDirectory(prefix="voltura-books-folder-context-") as temp:
+        folder = Path(temp) / "Books with spaces 日本語"; folder.mkdir()
+        (folder / "Book.epub").write_bytes(b"PK fixture")
+        info = ShellInfo(); info.cbSize = c.sizeof(info); info.fMask = 0x40 | 0x100
+        info.lpVerb = "VolturaBooks.Browse"; info.lpFile = str(folder); info.nShow = 1
+        assert shell.ShellExecuteExW(c.byref(info))
+        class BrowseProcess:
+            pid = kernel.GetProcessId(info.hProcess)
+            returncode = None
+            def poll(self):
+                return 0 if kernel.WaitForSingleObject(info.hProcess, 0) == 0 else None
+        hwnd = wait_window(BrowseProcess(), "Voltura Books - Browse books")
+        shown = c.create_unicode_buffer(32768)
+        user.GetWindowTextW(user.GetDlgItem(hwnd, 1027), shown, len(shown))
+        assert Path(shown.value) == folder
+        click(hwnd, 2)
+        assert kernel.WaitForSingleObject(info.hProcess, 10000) == 0
+        kernel.CloseHandle(info.hProcess)
+    print("PASS Explorer folder verb opens Browse books at the selected Unicode folder")
     assert subprocess.run([str(INSTALLED / "VolturaBooks.exe"), "--uninstall"], timeout=10).returncode == 0
     deadline = time.monotonic() + 15
     while INSTALLED.exists() and time.monotonic() < deadline:
@@ -263,6 +290,11 @@ def main():
     try:
         winreg.OpenKey(winreg.HKEY_CURRENT_USER, KEY)
         raise AssertionError("Context registration survived uninstall")
+    except FileNotFoundError:
+        pass
+    try:
+        winreg.OpenKey(winreg.HKEY_CURRENT_USER, BROWSE_KEY)
+        raise AssertionError("Folder context registration survived uninstall")
     except FileNotFoundError:
         pass
     assert association() == initial_association

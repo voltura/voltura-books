@@ -263,6 +263,7 @@ int wmain(int argc,wchar_t** argv) {
         CHECK(script(reader->web.Get(),L"['Document header','Document footer','Footnote content','List item','Final DOCX paragraph'].every(t=>htmlFrame.contentDocument.body.textContent.includes(t))")==L"true");
         CHECK(script(reader->web.Get(),L"!htmlFrame.contentDocument.querySelector('a[href],iframe,script,object')&&!htmlFrame.contentDocument.body.textContent.includes('UNSAFE CHUNK')")==L"true");
         CHECK(waitFor([&]{return script(reader->web.Get(),L"htmlFrame.contentDocument.querySelector('img')?.naturalWidth>0")==L"true";}));
+        CHECK(script(reader->web.Get(),L"[...htmlFrame.contentDocument.querySelectorAll('section.docx img,section.docx svg')].every(v=>{const p=v.closest('section.docx').getBoundingClientRect(),r=v.getBoundingClientRect();return r.left>=p.left-1&&r.right<=p.right+1})")==L"true");
         capture(reader->web.Get(),L"reader-docx.png");
         reader->navigate(1);CHECK(waitFor([&]{return !reader->loading;}));CHECK(!reader->atStart);
         auto anchor=script(reader->web.Get(),L"htmlFrame.contentDocument.scrollingElement.scrollTop");

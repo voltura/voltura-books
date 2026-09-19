@@ -1,5 +1,12 @@
 #include "interactive_test.h"
+#include "core.h"
+namespace books {
+static fs::path rememberedByBrowserTest;
+static void fixtureSaveBrowseFolder(const fs::path& folder){rememberedByBrowserTest=folder;}
+}
+#define saveBrowseFolder fixtureSaveBrowseFolder
 #include "../src/browser.cpp"
+#undef saveBrowseFolder
 #include <fstream>
 #include <iostream>
 static int mode=0,failures=0;
@@ -141,6 +148,16 @@ static INT_PTR CALLBACK testProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
         auto state=reinterpret_cast<books::Browser*>(GetWindowLongPtrW(window,DWLP_USER));
         if(state->files.size()!=3) fail(__LINE__);
         if(mode==0) {
+            auto switched=state->initialFolder/(L"Folder with spaces \u65e5\u672c\u8a9e");
+            auto empty=state->initialFolder/L"Empty folder";
+            books::fs::create_directories(switched);books::fs::create_directories(empty);
+            {std::ofstream file(switched/L"Switched.docx");file<<"fixture";}
+            if(!books::navigateBrowseBooks(switched)||state->folder!=switched||state->files.size()!=1||state->files.front().filename()!=L"Switched.docx"||books::rememberedByBrowserTest!=switched)fail(__LINE__);
+            if(!books::navigateBrowseBooks(empty)||state->folder!=empty||!state->files.empty()||books::rememberedByBrowserTest!=empty)fail(__LINE__);
+            if(!books::navigateBrowseBooks(state->initialFolder)||state->folder!=state->initialFolder||state->files.size()!=3||books::rememberedByBrowserTest!=state->initialFolder)fail(__LINE__);
+            auto remembered=books::rememberedByBrowserTest;
+            if(books::navigateBrowseBooks(state->initialFolder/L"Missing")||state->folder!=state->initialFolder||books::rememberedByBrowserTest!=remembered)fail(__LINE__);
+            books::fs::remove_all(switched);books::fs::remove_all(empty);
             for(bool testSending:{true,false}) {
                 state->previewOnly=testSending;
                 for(int count=0;count<=3;++count) {
@@ -264,8 +281,10 @@ int wmain(int argc,wchar_t** argv) {
     for(auto dpiContext:{DPI_AWARENESS_CONTEXT_UNAWARE,DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2}) {
     auto previousDpi=SetThreadDpiAwarenessContext(dpiContext);
     for(mode=0;mode<3;++mode) {
-        books::Browser state; state.initialFolder=root;
+        books::rememberedByBrowserTest.clear();
+        books::Browser state; state.initialFolder=root; state.rememberInitialFolder=mode==0;
         auto result=DialogBoxParamW(GetModuleHandleW(nullptr),MAKEINTRESOURCEW(IDD_BROWSER),nullptr,testProc,reinterpret_cast<LPARAM>(&state));
+        if(mode==0 && books::rememberedByBrowserTest!=root)fail(__LINE__);
         if(mode==2) { if(result!=IDCANCEL || !state.selected.empty()) fail(__LINE__); }
         else if(result!=IDOK || state.selected.size()!=(mode==1 ? 2 : 1) || state.selected.front()!=root/L"A.epub" || (mode==1 && state.selected.back()!=root/L"C.rtf")) fail(__LINE__);
     }

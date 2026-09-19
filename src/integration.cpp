@@ -7,6 +7,7 @@
 
 namespace books {
 static constexpr wchar_t VerbKey[] = L"Software\\Classes\\*\\shell\\VolturaBooks.Send";
+static constexpr wchar_t BrowseVerbKey[] = L"Software\\Classes\\Directory\\shell\\VolturaBooks.Browse";
 static constexpr wchar_t LegacyVerbKey[] = L"Software\\Classes\\SystemFileAssociations\\.epub\\shell\\VolturaBooks.Send";
 static constexpr wchar_t UninstallKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\VolturaBooks";
 fs::path executablePath() {
@@ -57,7 +58,7 @@ void installApp() {
     }
     auto executable = destination / L"VolturaBooks.exe";
     auto quoted = L"\"" + executable.wstring() + L"\"";
-    reg(VerbKey, nullptr, L"Send to Kindle"); reg(VerbKey, L"Icon", quoted + L",0");
+    reg(VerbKey, nullptr, L"Send to Kindle with Voltura Books"); reg(VerbKey, L"Icon", quoted + L",0");
     reg(VerbKey, L"MultiSelectModel", L"Player");
     // Filter the general file verb instead of depending on the reader's
     // extension association being included in Explorer's displayed menu.
@@ -71,6 +72,9 @@ void installApp() {
     reg(ShellSelectionKey,nullptr,L"Voltura Books selection handler");
     reg((std::wstring(ShellSelectionKey)+L"\\LocalServer32").c_str(),nullptr,quoted+L" --shell");
     reg((std::wstring(VerbKey)+L"\\DropTarget").c_str(),L"CLSID",ShellSelectionId);
+    reg(BrowseVerbKey,nullptr,L"Browse with Voltura Books"); reg(BrowseVerbKey,L"Icon",quoted+L",0");
+    reg(BrowseVerbKey,L"MultiSelectModel",L"Single");
+    reg((std::wstring(BrowseVerbKey)+L"\\command").c_str(),nullptr,quoted+L" --browse \"%1\"");
     auto legacyStatus = RegDeleteTreeW(HKEY_CURRENT_USER, LegacyVerbKey);
     if (legacyStatus != ERROR_SUCCESS && legacyStatus != ERROR_FILE_NOT_FOUND)
         throw std::runtime_error("Could not remove the previous menu registration.");
@@ -82,7 +86,7 @@ void installApp() {
         if(!DeleteFileW(link.c_str()) && GetLastError()!=ERROR_FILE_NOT_FOUND)
             throw std::runtime_error("Could not replace the previous Start menu shortcut.");
     }
-    reg(UninstallKey, L"DisplayName", L"Voltura Books"); reg(UninstallKey, L"DisplayVersion", L"0.1.1");
+    reg(UninstallKey, L"DisplayName", L"Voltura Books"); reg(UninstallKey, L"DisplayVersion", L"0.1.2");
     reg(UninstallKey, L"Publisher", L"Voltura AB"); reg(UninstallKey, L"InstallLocation", destination.wstring());
     reg(UninstallKey, L"UninstallString", quoted + L" --uninstall");
     reg(UninstallKey, L"DisplayIcon", quoted + L",0");
@@ -97,7 +101,7 @@ void uninstallApp() {
     auto directory = installDir();
     auto script = directory / L"uninstall.ps1";
     if (!fs::is_regular_file(script)) throw std::runtime_error("The installed uninstall script is missing. Reinstall the package, then uninstall again.");
-    for (const auto key : {VerbKey, LegacyVerbKey, UninstallKey, ShellSelectionKey}) {
+    for (const auto key : {VerbKey, BrowseVerbKey, LegacyVerbKey, UninstallKey, ShellSelectionKey}) {
         auto code = RegDeleteTreeW(HKEY_CURRENT_USER, key);
         if (code != ERROR_SUCCESS && code != ERROR_FILE_NOT_FOUND) throw std::runtime_error("Could not remove Windows registration.");
     }

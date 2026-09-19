@@ -4,4 +4,4 @@ if (!(Test-Path -LiteralPath $executable)) { $executable = Join-Path $PSScriptRo
 if (!(Test-Path -LiteralPath $executable)) { throw 'Build the release package first with scripts/build.ps1.' }
 $process = Start-Process -FilePath $executable -ArgumentList '--install' -Wait -PassThru
 if ($process.ExitCode) { throw 'Installation failed.' }
-Write-Host 'Installed. Right-click an EPUB and choose Send to Kindle (Show more options on Windows 11).'
+Write-Host 'Installed. Right-click a supported file and choose Send to Kindle with Voltura Books, or right-click a folder and choose Browse with Voltura Books (under Show more options on Windows 11).'

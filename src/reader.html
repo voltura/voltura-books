@@ -92,7 +92,7 @@ async function openDocx() {
     await docx.renderAsync(data,rendered.body,rendered.head,{inWrapper:true,ignoreWidth:true,ignoreHeight:true,breakPages:true,ignoreLastRenderedPageBreak:true,useBase64URL:true,renderAltChunks:false,renderComments:false,renderChanges:false,experimental:false});
     sanitizeRenderedDocument(rendered);
     const style=rendered.createElement('style');
-    style.textContent='html,body{margin:0;background:white} .docx-wrapper{padding:16px!important;background:white!important} section.docx{box-sizing:border-box;max-width:100%;height:auto!important;min-height:0!important;overflow:visible!important;padding:24px!important;margin-bottom:24px!important} article{overflow:visible!important} img,svg{max-width:100%;height:auto} table{max-width:100%}';
+    style.textContent='html,body{margin:0;background:white} .docx-wrapper{padding:16px!important;background:white!important} section.docx{box-sizing:border-box;max-width:100%;height:auto!important;min-height:0!important;overflow:visible!important;padding:24px!important;margin-bottom:24px!important} article{overflow:visible!important} img,svg{max-width:100%;height:auto} section.docx img,section.docx svg{display:block;max-width:100%!important;margin-left:auto!important;margin-right:auto!important} table{max-width:100%}';
     rendered.head.append(style);
     openHtml(rendered);
   }catch{fail();}

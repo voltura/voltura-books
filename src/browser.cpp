@@ -26,6 +26,8 @@ namespace books {
 namespace {
 constexpr UINT PreviewReady=WM_APP+20;
 constexpr UINT ThumbnailsReady=WM_APP+21;
+constexpr UINT BrowseFolderRequest=WM_APP+23;
+HWND activeBrowser=nullptr;
 constexpr const wchar_t* GroupNames[]={L"EPUB",L"PDF",L"RTF",L"TXT",L"HTML",L"Word",L"Images"};
 int groupOf(const fs::path& file) {
     auto format=fileFormat(file.extension().wstring());
@@ -62,6 +64,7 @@ struct Browser {
     std::array<bool,std::size(GroupNames)> enabled{};
     bool allTypes=true,tiles=false,rebuilding=false;
     bool previewOnly=false;
+    bool rememberInitialFolder=false;
     HIMAGELIST imageList=nullptr;
     std::shared_ptr<Thumbnails> thumbnails=std::make_shared<Thumbnails>();
     std::map<fs::path,unsigned long long> sizes;
@@ -432,6 +435,7 @@ INT_PTR CALLBACK proc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
         if(message==WM_MEASUREITEM && wp==IDC_FILE_LIST) { reinterpret_cast<MEASUREITEMSTRUCT*>(lp)->itemHeight=48; return TRUE; }
         if(message==WM_INITDIALOG) {
             state=reinterpret_cast<Browser*>(lp); SetWindowLongPtrW(window,DWLP_USER,lp); applyTheme(window);
+            activeBrowser=window;
             for(auto id:{IDC_FILE_LIST,IDC_FILE_GRID})SetWindowSubclass(GetDlgItem(window,id),hoverItemsProc,1,0);
             state->tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,nullptr,WS_POPUP|TTS_ALWAYSTIP,0,0,0,0,window,nullptr,GetModuleHandleW(nullptr),nullptr);
             SetWindowTheme(state->tooltip,L"",L"");
@@ -470,16 +474,29 @@ INT_PTR CALLBACK proc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
                 }
                 if(SUCCEEDED(com)) CoUninitialize();
             }).detach();
-            if(!state->initialFolder.empty()) populateFolder(window,*state,state->initialFolder);
+            if(!state->initialFolder.empty()) {
+                try {
+                    populateFolder(window,*state,state->initialFolder);
+                    if(state->rememberInitialFolder) saveBrowseFolder(state->initialFolder);
+                } catch(...) { EndDialog(window,IDCANCEL); }
+            }
             return TRUE;
         }
         if(!state) return FALSE;
+        if(message==BrowseFolderRequest && lp) {
+            const auto& folder=*reinterpret_cast<const fs::path*>(lp);
+            try { populateFolder(window,*state,folder); }
+            catch(...) { SetWindowLongPtrW(window,DWLP_MSGRESULT,FALSE); return TRUE; }
+            saveBrowseFolder(folder);
+            if(IsIconic(window))ShowWindow(window,SW_RESTORE);
+            SetForegroundWindow(window); SetWindowLongPtrW(window,DWLP_MSGRESULT,TRUE); return TRUE;
+        }
         if((message==DialogShortcut&&wp==VK_F5)||(message==WM_COMMAND&&LOWORD(wp)==IDC_REFRESH)) {
             refreshFolder(window,*state); SetWindowLongPtrW(window,DWLP_MSGRESULT,TRUE); return TRUE;
         }
         if(message==DialogShortcut&&wp==VK_F11&&state->reader&&state->reader->canFullscreen()){toggleFullscreen(window,*state);SetWindowLongPtrW(window,DWLP_MSGRESULT,TRUE);return TRUE;}
         if(message==WM_COMMAND&&LOWORD(wp)==IDC_FULLSCREEN_READER&&state->reader){state->reader->openFullscreen();return TRUE;}
-        if(message==WM_DESTROY){DestroyWindow(state->tooltip);state->tooltip=nullptr;state->reader.reset();return TRUE;}
+        if(message==WM_DESTROY){if(activeBrowser==window)activeBrowser=nullptr;DestroyWindow(state->tooltip);state->tooltip=nullptr;state->reader.reset();return TRUE;}
         if(message==WM_COMMAND&&LOWORD(wp)>=IDC_READER_PREVIOUS&&LOWORD(wp)<=IDC_READER_FULLSCREEN&&state->reader){SendMessageW(state->reader->window(),WM_COMMAND,wp,lp);return TRUE;}
         if(message==WM_DRAWITEM&&wp>=IDC_READER_PREVIOUS&&wp<=IDC_READER_FULLSCREEN&&state->reader){SendMessageW(state->reader->window(),message,wp,lp);return TRUE;}
         if(message==WM_COMMAND&&LOWORD(wp)==IDCANCEL&&state->fullscreen){toggleFullscreen(window,*state);return TRUE;}
@@ -607,9 +624,12 @@ INT_PTR CALLBACK proc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
     return FALSE;
 }
 }
-std::vector<fs::path> browseBooks(HWND owner,const fs::path& initialFolder,bool previewOnly) {
+bool navigateBrowseBooks(const fs::path& folder) {
+    return activeBrowser && SendMessageW(activeBrowser,BrowseFolderRequest,0,reinterpret_cast<LPARAM>(&folder))==TRUE;
+}
+std::vector<fs::path> browseBooks(HWND owner,const fs::path& initialFolder,bool previewOnly,bool rememberInitialFolder) {
     INITCOMMONCONTROLSEX controls{sizeof(controls),ICC_LISTVIEW_CLASSES}; InitCommonControlsEx(&controls);
-    Browser state; state.initialFolder=initialFolder; state.previewOnly=previewOnly;
+    Browser state; state.initialFolder=initialFolder; state.previewOnly=previewOnly; state.rememberInitialFolder=rememberInitialFolder;
     if(state.initialFolder.empty()) state.initialFolder=defaultBrowseFolder();
     if(state.initialFolder.empty()) state.initialFolder=pickFolder(owner);
     if(state.initialFolder.empty()) return {};

@@ -11,14 +11,16 @@
 #include <fstream>
 #include <iostream>
 namespace books {
-bool instanceOnly=false, browsedInTestMode=false;
+bool instanceOnly=false, browsedInTestMode=false, navigationAvailable=false;
+fs::path browsedFolder,navigatedFolder;
 HWND hiddenLauncher=nullptr;
 BOOL fixtureVisible(HWND window){return instanceOnly&&window==hiddenLauncher ? TRUE : IsWindowVisible(window);}
 BOOL fixtureEnumWindows(DWORD thread,WNDENUMPROC callback,LPARAM data){return instanceOnly ? TRUE : EnumThreadWindows(thread,callback,data);}
-std::vector<fs::path> fixtureBrowse(HWND owner,const fs::path& folder,bool simulated){
+std::vector<fs::path> fixtureBrowse(HWND owner,const fs::path& folder,bool simulated,bool=false){
     if(!instanceOnly)return browseBooks(owner,folder,simulated);
-    browsedInTestMode=simulated;return {};
+    browsedInTestMode=simulated;browsedFolder=folder;return {};
 }
+bool fixtureNavigate(const fs::path& folder){navigatedFolder=folder;return navigationAvailable;}
 std::atomic_bool blockCover=false, coverEntered=false, coverExited=false;
 HBITMAP fixtureCover(const fs::path&,int,int) noexcept {
     if(blockCover.load()) { coverEntered=true; while(blockCover.load()) Sleep(1); coverExited=true; }
@@ -61,7 +63,9 @@ Result fixtureSend(const Settings&,const std::wstring&,const fs::path& path,std:
 #define IsWindowVisible fixtureVisible
 #define EnumThreadWindows fixtureEnumWindows
 #define browseBooks fixtureBrowse
+#define navigateBrowseBooks fixtureNavigate
 #include "../src/main.cpp"
+#undef navigateBrowseBooks
 #undef browseBooks
 #undef IsWindowVisible
 #undef EnumThreadWindows
@@ -106,6 +110,23 @@ static int instanceChecks(){
         DWORD invalid=2;data={2,sizeof(invalid),&invalid};
         check(!books::instanceProc(nullptr,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&data)),"invalid mode rejected");
     }
+    auto folder=books::fs::temp_directory_path()/(L"VolturaBooks instance folder \u65e5\u672c\u8a9e");books::fs::create_directories(folder);
+    auto folderText=folder.wstring();COPYDATASTRUCT folderData{3,static_cast<DWORD>((folderText.size()+1)*sizeof(wchar_t)),folderText.data()};
+    books::navigationAvailable=true;books::navigatedFolder.clear();
+    check(books::instanceProc(nullptr,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&folderData))==TRUE&&books::navigatedFolder==folder,"folder request navigates active browser");
+    books::navigationAvailable=false;
+    check(books::instanceProc(nullptr,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&folderData))==3,"folder request reports busy without browser or launcher");
+    std::wstring malformed=L"not terminated";COPYDATASTRUCT malformedData{3,static_cast<DWORD>(malformed.size()*sizeof(wchar_t)),malformed.data()};
+    check(!books::instanceProc(nullptr,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&malformedData)),"unterminated folder request rejected");
+    auto missingText=(folder/L"missing").wstring();COPYDATASTRUCT missingData{3,static_cast<DWORD>((missingText.size()+1)*sizeof(wchar_t)),missingText.data()};
+    check(!books::instanceProc(nullptr,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&missingData)),"missing folder request rejected");
+    std::vector<books::fs::path> paths;auto window=CreateDialogParamW(GetModuleHandleW(nullptr),MAKEINTRESOURCEW(IDD_DROP),nullptr,books::dropProc,reinterpret_cast<LPARAM>(&paths));
+    books::hiddenLauncher=window;books::browsedFolder.clear();
+    check(window&&books::instanceProc(nullptr,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&folderData))==TRUE,"folder request accepted by launcher");
+    MSG folderMessage{};check(PeekMessageW(&folderMessage,window,books::BrowseRequest,books::BrowseRequest,PM_REMOVE)!=FALSE,"folder browse request queued");
+    if(folderMessage.message==books::BrowseRequest)DispatchMessageW(&folderMessage);
+    check(books::browsedFolder==folder,"folder reaches browse view");books::hiddenLauncher=nullptr;
+    books::fs::remove_all(folder);
     check(GetForegroundWindow()==foreground,"desktop focus unchanged");
     CoUninitialize();std::cout<<"Instance forwarding: "<<failures<<" failures\n";return failures?1:0;
 }
