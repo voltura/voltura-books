@@ -8,6 +8,11 @@ import subprocess
 import tempfile
 import time
 import winreg
+import sys
+
+if "--interactive" not in sys.argv:
+    print("SKIP: desktop smoke test; requires --interactive and a clean test profile.")
+    sys.exit(77)
 
 ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / "dist/VolturaBooks.exe"
@@ -221,6 +226,7 @@ def main():
     assert association() == initial_association
     assert (Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Voltura Books - Settings.lnk").exists()
     assert (Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Voltura Books - Send a book.lnk").exists()
+    assert (Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Voltura Books - Browse books.lnk").exists()
     print("PASS per-user installation, quoted context command and unchanged default reader")
     # Invoke the registered Explorer verb through Windows Shell, not a direct CLI.
     class ShellInfo(c.Structure):

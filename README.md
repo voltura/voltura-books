@@ -34,10 +34,62 @@ is the address the book comes from; your Kindle email is where it goes.
 
 Installation is for your Windows account and does not change your default EPUB reader.
 Open **Voltura Books - Send a book** from Start to drag and drop one or more books, or select **Choose files…**.
-To try the app without sending anything, select **Preview only (no emails sent)** in the Send a book window. Preview mode simulates sending, needs no email setup, and leaves sent-book history unchanged. It resets when you close the app.
+Open **Voltura Books - Browse books** from Start (or run `VolturaBooks.exe --browse`) to go straight to browsing and reading. **Send book(s)** uses the same sending flow. **Close** exits browsing without opening the sending window or sending anything, including when browsing was opened from **Browse folder…**. Use `--browse --test-sending` to open directly with simulated sending enabled.
+Browsing tries the previous folder, Downloads, then Documents. If none can be read, it opens the folder picker first; cancelling exits without sending anything.
+To try the app without sending anything, select **Don’t send emails** in the Send a book window. **Test sending** simulates sending, needs no email setup, and leaves sent-book history unchanged. It resets when you close the app.
 
-Choose **Browse folder…** to explore supported files, preview covers and details, and select one or several to send. Search by filename, sort by name, size, or modified date, and see a larger preview beside the book details, including Created and Modified dates from file properties. You can also open a file in its usual app, show its folder, or copy its path. Switch between the file list and cover thumbnails. **All types** shows everything; choose one or more type buttons to narrow the list. Only types present in the folder appear, with pictures grouped under **Image**. Hold Ctrl or Shift to select several files.
+You can also start with this option checked by running `VolturaBooks.exe --test-sending`
+(formerly `--preview`). In Browse books, the action is **Test sending** for one
+selected file or **Test sending 3 books** for three selected files. Reading and
+fullscreen previews do not send emails, regardless of this checkbox.
+
+Choose **Browse folder…** to explore supported files, preview covers and details, and select one or several to send. Use the refresh icon or **F5** to reload files added, removed, or changed while browsing. Search by filename, sort by name or modified date, and see a larger preview beside the book details, including Created and Modified dates from file properties. You can also open a file in its usual app, show its folder, or copy its path. Switch between the file list and cover thumbnails. **All types** shows everything; choose one or more type buttons to narrow the list. Only types present in the folder appear, with pictures grouped under **Images**. Hold Ctrl or Shift to select several files.
 All routes open the same sending window with the cover and duplicate reminder.
+
+To read a PDF or EPUB in **Browse books**, hover near the preview's right edge and
+choose the next-page arrow. PDFs continue from the first-page preview; EPUBs open
+in reading order with their packaged styling and images. Hover the left or right
+edge to turn pages, or use the Left/Right keys while the reader has focus.
+A single-page, image-only EPUB opening that repeats the displayed cover resource
+is skipped; distinct or ambiguous opening sections are kept.
+The fullscreen control appears near the top-right on the cover and while reading.
+The details panel also has a **Read in full screen** button. **F11** toggles
+fullscreen and **Esc** returns to Browse books without closing it. Your current
+location is retained when changing view size, but is not saved between books.
+Image previews (JPEG, PNG, GIF, and BMP) also support fullscreen through the
+**View in full screen** button, the corner icon, or **F11**, without page arrows.
+TXT files open in a native read-only, word-wrapped reader. Scroll normally or use
+the edge arrows to move by a screenful; left at the beginning returns to the cover.
+UTF-8, BOM-marked UTF-16, and Windows-1252 text are supported. Text is loaded in
+small chunks as you read; there is no fixed 8 MB reading cutoff.
+RTF, HTML, HTM, DOC, and DOCX files also support reading and full screen. RTF preserves
+supported text formatting and embedded pictures. HTML displays inline styles and
+embedded images, without loading companion files or network resources.
+DOCX reading shows supported text formatting, tables, embedded images, headers,
+footers, and notes without requiring Word or LibreOffice. Scroll normally or use
+previous/next to move by a screenful. Explicit page breaks are preserved, but
+layout and pagination can differ from Word and Kindle. Word 97–2003 DOC files
+convert locally to temporary DOCX when reading starts, using the same formatted
+reader. Supported formatting, tables, and embedded pictures are preserved.
+The original document is sent unchanged and used by **Open with default app**.
+DOC conversion requires .NET Framework 4.8 (included with Windows 11), not Office.
+Encrypted, damaged, and pre-97 DOC files cannot be converted; open the original
+in its default app. Conversion is limited to 30 seconds and 128 MiB of output.
+A centered spinner and status text appear immediately when opening a document.
+Page changes and view preparation show feedback after 150 ms if still busy.
+Fullscreen can still be exited while loading, and enlarging a cover does not
+start reading.
+Reader content loads when you open it and is released when you change books.
+Formatted readers run with a memory budget based on available system resources.
+If formatted reading is unavailable, choose **Read as text** or **Open with default app**.
+Text-only fallback drops formatting and images and uses temporary disk storage,
+which is removed when the document closes.
+
+EPUB, HTML, DOC, and DOCX reading use Microsoft Edge WebView2 Runtime, normally included in Windows 11.
+If it is unavailable, HTML and DOCX (including successfully converted DOC) offer **Read as text**; you can also use
+**Open with default app**. Book scripts, external links,
+and remote resources are blocked; DRM, encrypted/obfuscated EPUB resources and
+password-protected PDFs and encrypted DOC/DOCX documents are not supported.
 Open **Voltura Books - Settings** whenever you want to change your setup.
 
 ## Choose how to send
@@ -63,6 +115,7 @@ does not automatically retry or switch sending methods.
 - On a failure, sending pauses for Retry, Skip, or Cancel. Cancellation stops the current attempt and leaves remaining books unsent. A summary reports sent, skipped, unconfirmed, and unstarted books.
 - Previously sent books can be sent again or skipped; Cancel stops the remaining queue.
 - Opening Voltura Books again brings the current window forward. If you open more files during a send, you can add them after the current books.
+- `--browse --test-sending` preserves simulated sending when forwarded to the open sending launcher. If a browser or sending flow is already open in a different mode, close it before switching modes.
 - If a connection ends with an uncertain result, check your Kindle before retrying.
 - Duplicate reminders use the book's contents and destination, so renaming the file does not bypass the reminder. Only accepted submissions are recorded.
 - EPUB covers come from the book itself. PDFs show the first page, images show the picture, and DOCX uses an embedded thumbnail if present. Other documents and files without a preview show a full-size placeholder cover.

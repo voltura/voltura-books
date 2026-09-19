@@ -1,14 +1,24 @@
+#include "interactive_test.h"
 // Run the production queue and dialogs with deterministic mail/history adapters.
 #include "core.h"
 #include "history.h"
 #include "theme.h"
 #include "resource.h"
 #include "cover.h"
+#include "browser.h"
 #include <atomic>
 #include <vector>
 #include <fstream>
 #include <iostream>
 namespace books {
+bool instanceOnly=false, browsedInTestMode=false;
+HWND hiddenLauncher=nullptr;
+BOOL fixtureVisible(HWND window){return instanceOnly&&window==hiddenLauncher ? TRUE : IsWindowVisible(window);}
+BOOL fixtureEnumWindows(DWORD thread,WNDENUMPROC callback,LPARAM data){return instanceOnly ? TRUE : EnumThreadWindows(thread,callback,data);}
+std::vector<fs::path> fixtureBrowse(HWND owner,const fs::path& folder,bool simulated){
+    if(!instanceOnly)return browseBooks(owner,folder,simulated);
+    browsedInTestMode=simulated;return {};
+}
 std::atomic_bool blockCover=false, coverEntered=false, coverExited=false;
 HBITMAP fixtureCover(const fs::path&,int,int) noexcept {
     if(blockCover.load()) { coverEntered=true; while(blockCover.load()) Sleep(1); coverExited=true; }
@@ -48,7 +58,13 @@ Result fixtureSend(const Settings&,const std::wstring&,const fs::path& path,std:
 #define themedMessageBox fixtureMessage
 #define sendBook fixtureSend
 #define wWinMain unusedApplicationEntry
+#define IsWindowVisible fixtureVisible
+#define EnumThreadWindows fixtureEnumWindows
+#define browseBooks fixtureBrowse
 #include "../src/main.cpp"
+#undef browseBooks
+#undef IsWindowVisible
+#undef EnumThreadWindows
 #undef wWinMain
 #undef loadCover
 #undef sendBook
@@ -57,6 +73,42 @@ Result fixtureSend(const Settings&,const std::wstring&,const fs::path& path,std:
 #undef sentBefore
 #undef loadPassword
 #undef loadSettings
+static int instanceChecks(){
+    books::instanceOnly=true;
+    CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+    INITCOMMONCONTROLSEX controls{sizeof(controls),ICC_STANDARD_CLASSES};InitCommonControlsEx(&controls);
+    int failures=0;
+    auto check=[&](bool ok,const char* text){if(!ok){++failures;std::cerr<<"FAIL: "<<text<<"\n";}};
+    auto foreground=GetForegroundWindow();
+    // Modeless dialogs start hidden. Only the broker's visibility predicate is
+    // adapted; the real mode handler runs, while browsing is replaced by a spy.
+    for(DWORD mode:{1u,0u}){
+        std::vector<books::fs::path> paths;
+        books::previewOnly=mode==0;
+        auto window=CreateDialogParamW(GetModuleHandleW(nullptr),MAKEINTRESOURCEW(IDD_DROP),nullptr,books::dropProc,reinterpret_cast<LPARAM>(&paths));
+        check(window!=nullptr,"hidden launcher created");if(!window)continue;
+        books::hiddenLauncher=window;
+        COPYDATASTRUCT data{2,sizeof(mode),&mode};
+        check(books::instanceProc(nullptr,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&data))==TRUE,"browse request accepted");
+        MSG message{};
+        check(PeekMessageW(&message,window,books::BrowseRequest,books::BrowseRequest,PM_REMOVE)!=FALSE,"browse request queued");
+        if(message.message==books::BrowseRequest)DispatchMessageW(&message);
+        check(books::previewOnly==(mode!=0)&&books::browsedInTestMode==(mode!=0),"requested mode reaches browsing");
+        check(!IsWindowVisible(window),"launcher remains hidden");
+        DestroyWindow(window);books::hiddenLauncher=nullptr;
+        books::previewOnly=mode==0;
+        check(books::instanceProc(nullptr,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&data))==2,"active mode conflict rejected");
+        check(books::previewOnly==(mode==0),"rejection preserves active mode");
+        books::previewOnly=mode!=0;
+        check(books::instanceProc(nullptr,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&data))==TRUE,"matching active mode accepted");
+        data.cbData=0;
+        check(!books::instanceProc(nullptr,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&data)),"missing mode rejected");
+        DWORD invalid=2;data={2,sizeof(invalid),&invalid};
+        check(!books::instanceProc(nullptr,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&data)),"invalid mode rejected");
+    }
+    check(GetForegroundWindow()==foreground,"desktop focus unchanged");
+    CoUninitialize();std::cout<<"Instance forwarding: "<<failures<<" failures\n";return failures?1:0;
+}
 static LRESULT CALLBACK observe(HWND w,UINT m,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR) {
     auto result=DefSubclassProc(w,m,wp,lp);
     if(m==books::SendComplete && books::scenario==8) PostMessageW(w,WM_COMMAND,IDCANCEL,0);
@@ -77,37 +129,38 @@ static LRESULT CALLBACK hook(int code,WPARAM wp,LPARAM lp) {
 static bool settingsLayoutPassed=true;
 static INT_PTR CALLBACK settingsCheck(HWND window,UINT message,WPARAM wp,LPARAM lp) {
     if(message==WM_APP+91) {
-        settingsLayoutPassed &= books::text(window,IDC_PASSWORD)==L"test-password";
-        settingsLayoutPassed &= SendDlgItemMessageW(window,IDC_PASSWORD,EM_GETPASSWORDCHAR,0,0)!=0;
+        ShowWindow(window,SW_SHOWNOACTIVATE);
+        {bool passed=(books::text(window,IDC_PASSWORD)==L"test-password");if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
+        {bool passed=(SendDlgItemMessageW(window,IDC_PASSWORD,EM_GETPASSWORDCHAR,0,0)!=0);if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
         SendDlgItemMessageW(window,IDC_PASSWORD_SHOW,BM_CLICK,0,0);
-        settingsLayoutPassed &= SendDlgItemMessageW(window,IDC_PASSWORD,EM_GETPASSWORDCHAR,0,0)==0;
+        {bool passed=(SendDlgItemMessageW(window,IDC_PASSWORD,EM_GETPASSWORDCHAR,0,0)==0);if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
         SendDlgItemMessageW(window,IDC_PASSWORD_SHOW,BM_CLICK,0,0);
-        settingsLayoutPassed &= SendDlgItemMessageW(window,IDC_PASSWORD,EM_GETPASSWORDCHAR,0,0)!=0;
+        {bool passed=(SendDlgItemMessageW(window,IDC_PASSWORD,EM_GETPASSWORDCHAR,0,0)!=0);if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
         SetDlgItemTextW(window,IDC_PASSWORD,L"");
-        settingsLayoutPassed &= books::text(window,IDC_PASSWORD).empty();
+        {bool passed=(books::text(window,IDC_PASSWORD).empty());if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
         SendDlgItemMessageW(window,IDC_METHOD_DIRECT,BM_CLICK,0,0);
-        settingsLayoutPassed &= IsDlgButtonChecked(window,IDC_METHOD_DIRECT)==BST_CHECKED && !IsWindowVisible(GetDlgItem(window,IDC_PASSWORD));
+        {bool passed=(IsDlgButtonChecked(window,IDC_METHOD_DIRECT)==BST_CHECKED && !IsWindowVisible(GetDlgItem(window,IDC_PASSWORD)));if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
         SendDlgItemMessageW(window,IDC_METHOD_PROVIDER,BM_CLICK,0,0);
-        settingsLayoutPassed &= IsDlgButtonChecked(window,IDC_METHOD_PROVIDER)==BST_CHECKED && IsWindowVisible(GetDlgItem(window,IDC_PASSWORD));
+        {bool passed=(IsDlgButtonChecked(window,IDC_METHOD_PROVIDER)==BST_CHECKED && IsWindowVisible(GetDlgItem(window,IDC_PASSWORD)));if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
         SendDlgItemMessageW(window,IDC_ADVANCED,BM_CLICK,0,0);
-        settingsLayoutPassed &= IsWindowVisible(GetDlgItem(window,IDC_HOST));
+        {bool passed=(IsWindowVisible(GetDlgItem(window,IDC_HOST)) != FALSE);if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
         SendDlgItemMessageW(window,IDC_ADVANCED,BM_CLICK,0,0);
-        settingsLayoutPassed &= !IsWindowVisible(GetDlgItem(window,IDC_HOST));
+        {bool passed=(!IsWindowVisible(GetDlgItem(window,IDC_HOST)));if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
         SetDlgItemTextW(window,IDC_PORT,L"465");
         SendDlgItemMessageW(window,IDC_PORT,EM_SETSEL,3,3);
         SendDlgItemMessageW(window,IDC_PORT,WM_CHAR,L'a',0);
-        settingsLayoutPassed &= books::text(window,IDC_PORT)==L"465";
-        settingsLayoutPassed &= !(GetWindowLongPtrW(GetDlgItem(window,IDC_PORT),GWL_STYLE)&ES_NUMBER);
+        {bool passed=(books::text(window,IDC_PORT)==L"465");if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
+        {bool passed=(!(GetWindowLongPtrW(GetDlgItem(window,IDC_PORT),GWL_STYLE)&ES_NUMBER));if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
         SetDlgItemTextW(window,IDC_HOST,L"send.one.com");
         SendDlgItemMessageW(window,IDC_HOST,EM_SETSEL,12,12);
         SendDlgItemMessageW(window,IDC_HOST,WM_CHAR,L'#',0);
-        SendDlgItemMessageW(window,IDC_HOST,WM_CHAR,L'§',0);
-        settingsLayoutPassed &= books::text(window,IDC_HOST)==L"send.one.com";
+        SendDlgItemMessageW(window,IDC_HOST,WM_CHAR,L'\u00A7',0);
+        {bool passed=(books::text(window,IDC_HOST)==L"send.one.com");if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
         SendDlgItemMessageW(window,IDC_HOST,WM_CHAR,L'a',0);
-        settingsLayoutPassed &= books::text(window,IDC_HOST)==L"send.one.coma";
+        {bool passed=(books::text(window,IDC_HOST)==L"send.one.coma");if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
         SendMessageW(window,WM_HOST_INPUT_REJECTED,0,0);
-        settingsLayoutPassed &= !books::text(window,IDC_HOST_ERROR).empty();
-        settingsLayoutPassed &= books::text(window,IDC_DISCOVERY_STATUS).find(L"Paste a server")==std::wstring::npos;
+        {bool passed=(!books::text(window,IDC_HOST_ERROR).empty());if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
+        {bool passed=(books::text(window,IDC_DISCOVERY_STATUS).find(L"Paste a server")==std::wstring::npos);if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
         auto state=reinterpret_cast<books::SettingsDialog*>(GetWindowLongPtrW(window,DWLP_USER));
         SetDlgItemTextW(window,IDC_SENDER,L"sender@example.com");
         SetDlgItemTextW(window,IDC_HOST,L"");
@@ -115,9 +168,9 @@ static INT_PTR CALLBACK settingsCheck(HWND window,UINT message,WPARAM wp,LPARAM 
         state->job=std::make_shared<books::SetupJob>(); state->job->id=999;
         state->job->sender=state->lastLookup=L"sender@example.com"; state->job->done=true;
         SendMessageW(window,books::MailSetupReady,999,0);
-        settingsLayoutPassed &= !state->job && IsDlgButtonChecked(window,IDC_ADVANCED)==BST_CHECKED;
+        {bool passed=(!state->job && IsDlgButtonChecked(window,IDC_ADVANCED)==BST_CHECKED);if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
         CheckDlgButton(window,IDC_ADVANCED,BST_UNCHECKED);
-        settingsLayoutPassed &= !books::startLookup(window,*state);
+        {bool passed=(!books::startLookup(window,*state));if(!passed)std::cerr<<"Settings check failed at "<<__LINE__<<"\n";settingsLayoutPassed &= passed;}
         EndDialog(window,IDCANCEL); return TRUE;
     }
     auto result=books::settingsProc(window,message,wp,lp);
@@ -143,7 +196,9 @@ static INT_PTR CALLBACK previewCheck(HWND window,UINT message,WPARAM wp,LPARAM l
     }
     return FALSE;
 }
-int main() {
+int main(int argc,char** argv) {
+    if(argc==2&&std::string(argv[1])=="--instance-only")return instanceChecks();
+    if(!interactiveTestsEnabled())return 77;
     CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
     INITCOMMONCONTROLSEX controls{sizeof(controls),ICC_STANDARD_CLASSES|ICC_PROGRESS_CLASS}; InitCommonControlsEx(&controls);
     const auto root=books::fs::temp_directory_path()/(L"VolturaBooks-queue-"+std::to_wstring(GetCurrentProcessId())); books::fs::create_directories(root);

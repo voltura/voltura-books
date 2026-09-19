@@ -19,6 +19,25 @@ struct Theme {
     ~Theme() { DeleteObject(background); DeleteObject(field); DeleteObject(panelBrush); DeleteObject(heading); DeleteObject(statusHeading); DeleteObject(sectionHeading); }
 };
 Theme* theme(HWND window) { return reinterpret_cast<Theme*>(GetPropW(window, ThemeProperty)); }
+thread_local HHOOK focusInputHook=nullptr;
+thread_local unsigned themedWindows=0;
+bool highContrast() {HIGHCONTRASTW value{sizeof(value)};return SystemParametersInfoW(SPI_GETHIGHCONTRAST,sizeof(value),&value,0)&&(value.dwFlags&HCF_HIGHCONTRASTON);}
+bool alwaysShowCues() {BOOL enabled=FALSE;SystemParametersInfoW(SPI_GETKEYBOARDCUES,0,&enabled,0);return enabled||highContrast();}
+HWND themedAncestor(HWND window) {for(auto current=window;current;current=GetParent(current))if(theme(current))return current;return nullptr;}
+// Observe this UI thread only, before dialog keyboard processing consumes Tab.
+// Native focus, tab order and control semantics remain untouched.
+LRESULT CALLBACK focusInput(int code,WPARAM wp,LPARAM lp) {
+    if(code==HC_ACTION&&wp==PM_REMOVE){auto message=reinterpret_cast<MSG*>(lp);
+        const bool keyboard=message->message==WM_KEYDOWN||message->message==WM_SYSKEYDOWN;
+        const bool mouse=message->message==WM_LBUTTONDOWN||message->message==WM_RBUTTONDOWN||message->message==WM_MBUTTONDOWN||message->message==WM_XBUTTONDOWN;
+        if(keyboard||mouse)updateFocusCues(message->hwnd,keyboard);
+        if(message->message==WM_KEYDOWN&&(message->wParam==VK_F11||message->wParam==VK_F5)){
+            auto root=themedAncestor(message->hwnd);
+            if(root&&SendMessageW(root,DialogShortcut,message->wParam,0))message->message=WM_NULL;
+        }
+    }
+    return CallNextHookEx(focusInputHook,code,wp,lp);
+}
 bool prefersDark() {
     HIGHCONTRASTW contrast{sizeof(contrast)};
     if(SystemParametersInfoW(SPI_GETHIGHCONTRAST,sizeof(contrast),&contrast,0) && (contrast.dwFlags&HCF_HIGHCONTRASTON)) return false;
@@ -92,14 +111,15 @@ LRESULT CALLBACK editProc(HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,
         const int available=r->bottom-r->top;
         const int height=(std::min)(available,static_cast<int>(metrics.tmHeight));
         r->top+=(available-height)/2; r->bottom=r->top+height;
-        r->left+=pad+(GetDlgCtrlID(window)==IDC_SEARCH ? MulDiv(22,GetDpiForWindow(window),96) : 0); r->right-=pad; return 0;
+        r->left+=pad+(GetDlgCtrlID(window)==IDC_SEARCH ? MulDiv(22,GetDpiForWindow(window),96) : 0);
+        r->right-=pad+(GetDlgCtrlID(window)==IDC_SEARCH ? MulDiv(30,GetDpiForWindow(window),96) : 0); return 0;
     }
     if(message==WM_NCPAINT && t) {
         HDC dc=GetWindowDC(window); RECT r{},client{}; GetWindowRect(window,&r); GetClientRect(window,&client);
         POINT origin{}; ClientToScreen(window,&origin); OffsetRect(&client,origin.x-r.left,origin.y-r.top);
         ExcludeClipRect(dc,client.left,client.top,client.right,client.bottom);
         OffsetRect(&r,-r.left,-r.top); fill(dc,r,t->surface);
-        rounded(dc,r,t->input,GetFocus()==window ? (t->dark ? RGB(96,205,255) : GetSysColor(COLOR_HIGHLIGHT)) : (t->dark ? RGB(78,78,78) : GetSysColor(COLOR_WINDOWFRAME)),pad);
+        rounded(dc,r,t->input,GetFocus()==window&&focusCuesVisible(window) ? (t->dark ? RGB(96,205,255) : GetSysColor(COLOR_HIGHLIGHT)) : (t->dark ? RGB(78,78,78) : GetSysColor(COLOR_WINDOWFRAME)),pad);
         if(GetDlgCtrlID(window)==IDC_SEARCH) {
             const int size=MulDiv(16,GetDpiForWindow(window),96);
             auto font=CreateFontW(-size,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe Fluent Icons");
@@ -113,7 +133,7 @@ LRESULT CALLBACK editProc(HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,
     auto result=DefSubclassProc(window,message,wp,lp);
     if(message==WM_SETFONT)
         SetWindowPos(window,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
-    if(message==WM_SETFOCUS || message==WM_KILLFOCUS) RedrawWindow(window,nullptr,nullptr,RDW_INVALIDATE|RDW_FRAME);
+    if(message==WM_SETFOCUS || message==WM_KILLFOCUS || message==WM_UPDATEUISTATE) RedrawWindow(window,nullptr,nullptr,RDW_INVALIDATE|RDW_FRAME);
     return result;
 }
 LRESULT CALLBACK comboProc(HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR) {
@@ -121,7 +141,7 @@ LRESULT CALLBACK comboProc(HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PTR
     if(message==WM_PAINT && t && t->dark) {
         PAINTSTRUCT paint{}; HDC dc=BeginPaint(window,&paint);
         RECT r{}; GetClientRect(window,&r); fill(dc,r,t->surface);
-        rounded(dc,r,t->input,GetFocus()==window ? RGB(96,205,255) : RGB(78,78,78),MulDiv(7,GetDpiForWindow(window),96));
+        rounded(dc,r,t->input,GetFocus()==window&&focusCuesVisible(window) ? RGB(96,205,255) : RGB(78,78,78),MulDiv(7,GetDpiForWindow(window),96));
         auto font=SelectObject(dc,reinterpret_cast<HFONT>(SendMessageW(window,WM_GETFONT,0,0)));
         SetBkMode(dc,TRANSPARENT); SetTextColor(dc,t->foreground);
         RECT text=r; const int pad=MulDiv(6,GetDpiForWindow(window),96); text.left+=pad; text.right-=pad*4;
@@ -130,7 +150,7 @@ LRESULT CALLBACK comboProc(HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PTR
         SelectObject(dc,font); EndPaint(window,&paint); return 0;
     }
     auto result=DefSubclassProc(window,message,wp,lp);
-    if(message==WM_SETFOCUS || message==WM_KILLFOCUS || message==CB_SETCURSEL) InvalidateRect(window,nullptr,FALSE);
+    if(message==WM_SETFOCUS || message==WM_KILLFOCUS || message==CB_SETCURSEL || message==WM_UPDATEUISTATE) InvalidateRect(window,nullptr,FALSE);
     return result;
 }
 const wchar_t* actionButtonGlyph(HWND button) {
@@ -150,6 +170,8 @@ const wchar_t* actionButtonGlyph(HWND button) {
         case IDC_BROWSE_FOLDER: case IDC_FOLDER: case IDC_OPEN_FOLDER: return L"\xE8B7";
         case IDC_OPEN_FILE: return L"\xE8A7";
         case IDC_COPY_PATH: return L"\xE8C8";
+        case IDC_REFRESH: return L"\xE72C";
+        case IDC_FULLSCREEN_READER: return L"\xE740";
         case IDC_UPDATE_OPEN: return L"\xE896";
         case IDC_ABOUT_WEBSITE: return L"\xE774";
         case IDC_ABOUT_ISSUES: return L"\xEBE8";
@@ -175,7 +197,7 @@ void paintButton(NMCUSTOMDRAW* draw, const Theme& t) {
                 SelectObject(draw->hdc,glyph); SetBkMode(draw->hdc,TRANSPARENT); SetTextColor(draw->hdc,t.foreground);
                 const wchar_t* icon=controlId==IDC_PASSWORD_COPY ? L"\xE8C8" : SendDlgItemMessageW(GetParent(button),IDC_PASSWORD,EM_GETPASSWORDCHAR,0,0) ? L"\xE890" : L"\xED1A";
                 DrawTextW(draw->hdc,icon,1,&r,DT_SINGLELINE|DT_CENTER|DT_VCENTER);
-                if((draw->uItemState&CDIS_FOCUS) && !(SendMessageW(button,WM_QUERYUISTATE,0,0)&UISF_HIDEFOCUS)) { InflateRect(&r,-3,-3); DrawFocusRect(draw->hdc,&r); }
+                if(draw->uItemState&CDIS_FOCUS)drawKeyboardFocus(button,draw->hdc,r);
                 RestoreDC(draw->hdc,saved); DeleteObject(glyph); return;
             }
             if(controlId==IDC_ADVANCED && GetDlgItem(GetParent(button),IDC_METHOD_DIRECT)) {
@@ -186,7 +208,7 @@ void paintButton(NMCUSTOMDRAW* draw, const Theme& t) {
                 auto glyph=CreateFontW(-size,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe Fluent Icons"); SelectObject(draw->hdc,glyph);
                 RECT gear{0,0,size,r.bottom}; DrawTextW(draw->hdc,L"\xE713",1,&gear,DT_SINGLELINE|DT_CENTER|DT_VCENTER);
                 RECT icon{r.right-size,0,r.right,r.bottom}; DrawTextW(draw->hdc,IsDlgButtonChecked(GetParent(button),IDC_ADVANCED)==BST_CHECKED ? L"\xE70E" : L"\xE70D",1,&icon,DT_SINGLELINE|DT_CENTER|DT_VCENTER);
-                if((draw->uItemState&CDIS_FOCUS) && !(SendMessageW(button,WM_QUERYUISTATE,0,0)&UISF_HIDEFOCUS)) { RECT cue{0,r.bottom-2,r.right,r.bottom-1}; fill(draw->hdc,cue,t.foreground); }
+                if(draw->uItemState&CDIS_FOCUS)drawKeyboardFocus(button,draw->hdc,r);
                 RestoreDC(draw->hdc,saved); DeleteObject(glyph); return;
             }
             if(controlId==IDC_METHOD_DIRECT || controlId==IDC_METHOD_PROVIDER) {
@@ -204,7 +226,7 @@ void paintButton(NMCUSTOMDRAW* draw, const Theme& t) {
                 DrawTextW(draw->hdc,controlId==IDC_METHOD_DIRECT ? L"No password needed" : L"Your existing email account",-1,&text,DT_SINGLELINE|DT_NOPREFIX);
                 auto glyph=CreateFontW(-iconSize,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe Fluent Icons"); SelectObject(draw->hdc,glyph);
                 RECT icon{pad,0,pad+iconSize,r.bottom}; DrawTextW(draw->hdc,controlId==IDC_METHOD_DIRECT ? L"\xE724" : L"\xE715",1,&icon,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
-                if((draw->uItemState&CDIS_FOCUS) && !(SendMessageW(button,WM_QUERYUISTATE,0,0)&UISF_HIDEFOCUS)) { RECT cue{pad,r.bottom-4,r.right-pad,r.bottom-3}; fill(draw->hdc,cue,GetTextColor(draw->hdc)); }
+                if(draw->uItemState&CDIS_FOCUS)drawKeyboardFocus(button,draw->hdc,r,selected);
                 RestoreDC(draw->hdc,saved); DeleteObject(glyph); DeleteObject(bold); return;
             }
             if(check && (GetWindowLongPtrW(button,GWL_STYLE)&BS_PUSHLIKE)) {
@@ -222,57 +244,75 @@ void paintButton(NMCUSTOMDRAW* draw, const Theme& t) {
                     SelectObject(draw->hdc,glyphFont);
                 }
                 DrawTextW(draw->hdc,value.c_str(),-1,&text,DT_SINGLELINE|DT_VCENTER|DT_CENTER|DT_NOPREFIX);
-                if((draw->uItemState&CDIS_FOCUS) && !(SendMessageW(button,WM_QUERYUISTATE,0,0)&UISF_HIDEFOCUS)) {
-                    // Keyboard focus uses a small underline, never a frame around a pill.
-                    const int inset=MulDiv(10,GetDpiForWindow(button),96);
-                    RECT cue{r.left+inset,r.bottom-MulDiv(4,GetDpiForWindow(button),96),r.right-inset,r.bottom-MulDiv(3,GetDpiForWindow(button),96)};
-                    fill(draw->hdc,cue,selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : t.foreground);
-                }
+                if(draw->uItemState&CDIS_FOCUS)drawKeyboardFocus(button,draw->hdc,r,selected);
                 RestoreDC(draw->hdc,saved); if(glyphFont) DeleteObject(glyphFont); return;
             }
             const bool primary=(GetDlgItem(GetParent(button),IDC_DROP_ZONE) ? GetDlgCtrlID(button)==IDC_CHOOSE_BOOK : type==BS_DEFPUSHBUTTON) && !disabled;
             const auto id=GetDlgCtrlID(button);
-            fill(draw->hdc,r,GetDlgItem(GetParent(button),IDC_SEARCH) && (id==IDC_OPEN_FILE || id==IDC_OPEN_FOLDER || id==IDC_COPY_PATH) ? t.panel : t.surface);
+            fill(draw->hdc,r,GetDlgItem(GetParent(button),IDC_SEARCH) && (id==IDC_OPEN_FILE || id==IDC_OPEN_FOLDER || id==IDC_COPY_PATH || id==IDC_FULLSCREEN_READER) ? t.panel : t.surface);
             if(auto glyph=actionButtonGlyph(button)) {
-                const auto background=primary ? GetSysColor(COLOR_HIGHLIGHT) : t.dark ? (pressed ? RGB(65,65,65) : RGB(48,48,48)) : GetSysColor(COLOR_BTNFACE);
+                const bool refreshHot=id==IDC_REFRESH && !disabled && (draw->uItemState&CDIS_HOT);
+                const auto background=primary ? GetSysColor(COLOR_HIGHLIGHT) : t.dark ? (pressed ? RGB(65,65,65) : refreshHot ? RGB(58,58,58) : RGB(48,48,48)) : id==IDC_REFRESH && pressed ? GetSysColor(COLOR_3DSHADOW) : refreshHot ? GetSysColor(COLOR_3DLIGHT) : GetSysColor(COLOR_BTNFACE);
                 rounded(draw->hdc,r,background,primary ? background : t.dark ? RGB(78,78,78) : GetSysColor(COLOR_3DSHADOW),MulDiv(7,GetDpiForWindow(button),96));
                 SetTextColor(draw->hdc,disabled ? GetSysColor(COLOR_GRAYTEXT) : primary ? GetSysColor(COLOR_HIGHLIGHTTEXT) : t.foreground); SetBkMode(draw->hdc,TRANSPARENT);
-                auto value=label(button); SIZE size{}; GetTextExtentPoint32W(draw->hdc,value.c_str(),static_cast<int>(value.size()),&size);
+                auto value=id==IDC_REFRESH ? std::wstring{} : label(button); SIZE size{}; GetTextExtentPoint32W(draw->hdc,value.c_str(),static_cast<int>(value.size()),&size);
                 const int iconSize=MulDiv(18,GetDpiForWindow(button),96),gap=MulDiv(8,GetDpiForWindow(button),96);
-                text.left=(r.right-size.cx-iconSize-gap)/2+iconSize+gap;
+                // Centre one shared content column for the browser details actions,
+                // rather than centring each differently sized label independently.
+                LONG columnWidth=size.cx;
+                if(GetDlgItem(GetParent(button),IDC_SEARCH) && (id==IDC_OPEN_FILE || id==IDC_OPEN_FOLDER || id==IDC_COPY_PATH || id==IDC_FULLSCREEN_READER)) {
+                    for(auto action:{IDC_FULLSCREEN_READER,IDC_OPEN_FILE,IDC_OPEN_FOLDER,IDC_COPY_PATH}) {
+                        auto sibling=GetDlgItem(GetParent(button),action);
+                        if(!sibling)continue;
+                        auto siblingLabel=label(sibling);SIZE measured{};
+                        auto font=reinterpret_cast<HFONT>(SendMessageW(sibling,WM_GETFONT,0,0));
+                        auto oldFont=font?SelectObject(draw->hdc,font):nullptr;
+                        GetTextExtentPoint32W(draw->hdc,siblingLabel.c_str(),static_cast<int>(siblingLabel.size()),&measured);
+                        if(oldFont)SelectObject(draw->hdc,oldFont);
+                        columnWidth=(std::max)(columnWidth,measured.cx);
+                    }
+                }
+                text.left=(r.right-columnWidth-iconSize-gap)/2+iconSize+gap;
                 DrawTextW(draw->hdc,value.c_str(),-1,&text,DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);
                 auto iconFont=CreateFontW(-iconSize,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe Fluent Icons");
                 auto old=SelectObject(draw->hdc,iconFont); RECT icon{text.left-iconSize-gap,0,text.left-gap,r.bottom};
-                DrawTextW(draw->hdc,glyph,1,&icon,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+                if(id==IDC_REFRESH)icon=r;
+                if(id==IDC_FULLSCREEN_READER)drawFullscreenIcon(draw->hdc,icon,GetDpiForWindow(button),GetTextColor(draw->hdc));
+                else DrawTextW(draw->hdc,glyph,1,&icon,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
                 SelectObject(draw->hdc,old); DeleteObject(iconFont);
-                if((draw->uItemState&CDIS_FOCUS) && !(SendMessageW(button,WM_QUERYUISTATE,0,0)&UISF_HIDEFOCUS)) { auto focus=r; InflateRect(&focus,-3,-3); DrawFocusRect(draw->hdc,&focus); }
+                if(draw->uItemState&CDIS_FOCUS)drawKeyboardFocus(button,draw->hdc,r,primary);
                 RestoreDC(draw->hdc,saved); return;
             }
             if(GetDlgItem(GetParent(button),IDC_METHOD_DIRECT) && !check) {
                 rounded(draw->hdc,r,primary ? GetSysColor(COLOR_HIGHLIGHT) : t.input,primary ? GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_GRAYTEXT),MulDiv(7,GetDpiForWindow(button),96));
                 SetTextColor(draw->hdc,primary ? GetSysColor(COLOR_HIGHLIGHTTEXT) : t.foreground); SetBkMode(draw->hdc,TRANSPARENT);
                 auto value=label(button); DrawTextW(draw->hdc,value.c_str(),-1,&text,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+                if(draw->uItemState&CDIS_FOCUS)drawKeyboardFocus(button,draw->hdc,r,primary);
                 RestoreDC(draw->hdc,saved); return;
             }
-            if(!check) rounded(draw->hdc,r,primary ? RGB(96,205,255) : pressed ? RGB(65,65,65) : RGB(48,48,48),primary ? RGB(96,205,255) : RGB(78,78,78),MulDiv(7,GetDpiForWindow(button),96));
+            if(!check) rounded(draw->hdc,r,primary ? GetSysColor(COLOR_HIGHLIGHT) : t.dark ? (pressed ? RGB(65,65,65) : RGB(48,48,48)) : GetSysColor(COLOR_BTNFACE),primary ? GetSysColor(COLOR_HIGHLIGHT) : t.dark ? RGB(78,78,78) : GetSysColor(COLOR_3DSHADOW),MulDiv(7,GetDpiForWindow(button),96));
             if(check) {
                 const int size=MulDiv(14,GetDpiForWindow(button),96);
                 RECT box{r.left,(r.bottom+r.top-size)/2,r.left+size,(r.bottom+r.top+size)/2};
-                border(draw->hdc,box,RGB(160,160,160));
+                border(draw->hdc,box,disabled?GetSysColor(COLOR_GRAYTEXT):t.dark?RGB(160,160,160):GetSysColor(COLOR_WINDOWFRAME));
+                if(draw->uItemState&CDIS_FOCUS)drawKeyboardFocus(button,draw->hdc,box);
                 if(SendMessageW(button,BM_GETCHECK,0,0)==BST_CHECKED) {
-                    SetTextColor(draw->hdc,RGB(96,205,255)); SetBkMode(draw->hdc,TRANSPARENT);
+                    SetTextColor(draw->hdc,disabled?GetSysColor(COLOR_GRAYTEXT):t.dark?RGB(96,205,255):GetSysColor(COLOR_HIGHLIGHT)); SetBkMode(draw->hdc,TRANSPARENT);
                     DrawTextW(draw->hdc,L"\x2713",1,&box,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
                 }
                 text.left=box.right+MulDiv(6,GetDpiForWindow(button),96);
             }
-            SetTextColor(draw->hdc,disabled ? RGB(150,150,150) : primary ? RGB(20,35,42) : t.foreground); SetBkMode(draw->hdc,TRANSPARENT);
+            SetTextColor(draw->hdc,disabled ? GetSysColor(COLOR_GRAYTEXT) : primary ? GetSysColor(COLOR_HIGHLIGHTTEXT) : t.foreground); SetBkMode(draw->hdc,TRANSPARENT);
             auto value=label(button); DrawTextW(draw->hdc,value.c_str(),-1,&text,DT_VCENTER|DT_SINGLELINE|(check ? DT_LEFT : DT_CENTER));
-            if((draw->uItemState&CDIS_FOCUS) && !(SendMessageW(button,WM_QUERYUISTATE,0,0)&UISF_HIDEFOCUS)) { InflateRect(&text,-3,-3); DrawFocusRect(draw->hdc,&text); }
+            if(!check&&(draw->uItemState&CDIS_FOCUS))drawKeyboardFocus(button,draw->hdc,r,primary);
     RestoreDC(draw->hdc,saved);
 }
 LRESULT CALLBACK buttonProc(HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR) {
+    // Owner-drawn controls (including reader overlays) supply their own visuals.
+    if((GetWindowLongPtrW(window,GWL_STYLE)&BS_TYPEMASK)==BS_OWNERDRAW)
+        return DefSubclassProc(window,message,wp,lp);
     auto t=theme(GetParent(window));
-    if(message==WM_PAINT && t && (t->dark || GetDlgItem(GetParent(window),IDC_METHOD_DIRECT) || actionButtonGlyph(window) || (GetWindowLongPtrW(window,GWL_STYLE)&BS_PUSHLIKE))) {
+    if(message==WM_PAINT && t && !highContrast()) {
         PAINTSTRUCT paint{}; NMCUSTOMDRAW draw{}; draw.hdc=BeginPaint(window,&paint); draw.hdr.hwndFrom=window;
         auto state=SendMessageW(window,BM_GETSTATE,0,0);
         draw.uItemState=((state&BST_PUSHED) ? CDIS_SELECTED : 0) | ((state&BST_FOCUS) ? CDIS_FOCUS : 0);
@@ -426,20 +466,21 @@ LRESULT CALLBACK dialogProc(HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PT
                     DrawTextW(draw->hDC,value.c_str(),-1,&r,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
                 }
             }
-            if(!t.dark && (draw->itemState&ODS_FOCUS)) DrawFocusRect(draw->hDC,&draw->rcItem);
+            if(!t.dark && (draw->itemState&ODS_FOCUS))drawKeyboardFocus(window,draw->hDC,draw->rcItem,selected);
             return TRUE;
         }
     }
     if(message==WM_NOTIFY && t.dark) {
         auto draw=reinterpret_cast<NMCUSTOMDRAW*>(lp);
         wchar_t cls[64]{}; GetClassNameW(draw->hdr.hwndFrom,cls,64);
-        if(draw->hdr.code==NM_CUSTOMDRAW && lstrcmpiW(cls,L"Button")==0 && draw->dwDrawStage==CDDS_PREPAINT) {
+        if(draw->hdr.code==NM_CUSTOMDRAW && lstrcmpiW(cls,L"Button")==0 && (GetWindowLongPtrW(draw->hdr.hwndFrom,GWL_STYLE)&BS_TYPEMASK)!=BS_OWNERDRAW && draw->dwDrawStage==CDDS_PREPAINT) {
             paintButton(draw,t);
             return CDRF_SKIPDEFAULT;
         }
     }
     if(message==WM_NCDESTROY) {
         RemovePropW(window,ThemeProperty); RemoveWindowSubclass(window,dialogProc,1);
+        if(themedWindows&&!--themedWindows){if(focusInputHook)UnhookWindowsHookEx(focusInputHook);focusInputHook=nullptr;}
         auto result=DefSubclassProc(window,message,wp,lp); delete &t; return result;
     }
     return DefSubclassProc(window,message,wp,lp);
@@ -456,6 +497,27 @@ void applyTheme(HWND window) {
         RemovePropW(window,ThemeProperty); delete t; return;
     }
     refresh(window,*t);
+    if(!themedWindows++)focusInputHook=SetWindowsHookExW(WH_GETMESSAGE,focusInput,nullptr,GetCurrentThreadId());
+    SendMessageW(window,WM_CHANGEUISTATE,MAKEWPARAM(UIS_INITIALIZE,0),0);
+    if(alwaysShowCues())updateFocusCues(window,true);
+}
+bool focusCuesVisible(HWND window) {return alwaysShowCues()||!(SendMessageW(window,WM_QUERYUISTATE,0,0)&UISF_HIDEFOCUS);}
+void updateFocusCues(HWND window,bool keyboard) {
+    auto root=themedAncestor(window);if(!root)return;
+    const bool show=keyboard||alwaysShowCues();
+    if(((SendMessageW(root,WM_QUERYUISTATE,0,0)&UISF_HIDEFOCUS)==0)==show)return;
+    SendMessageW(root,WM_CHANGEUISTATE,MAKEWPARAM(show?UIS_CLEAR:UIS_SET,UISF_HIDEFOCUS),0);
+    RedrawWindow(root,nullptr,nullptr,RDW_INVALIDATE|RDW_FRAME|RDW_ALLCHILDREN);
+}
+void drawKeyboardFocus(HWND window,HDC dc,RECT bounds,bool selected) {
+    if(!focusCuesVisible(window))return;
+    if(highContrast()){InflateRect(&bounds,-2,-2);DrawFocusRect(dc,&bounds);return;}
+    auto root=themedAncestor(window);const bool dark=root&&usesDarkTheme(root);
+    const int inset=MulDiv(2,GetDpiForWindow(window),96);InflateRect(&bounds,-inset,-inset);
+    auto pen=CreatePen(PS_SOLID,MulDiv(2,GetDpiForWindow(window),96),selected?GetSysColor(COLOR_HIGHLIGHTTEXT):dark?RGB(96,205,255):GetSysColor(COLOR_HIGHLIGHT));
+    auto oldPen=SelectObject(dc,pen),oldBrush=SelectObject(dc,GetStockObject(NULL_BRUSH));
+    const int radius=MulDiv(6,GetDpiForWindow(window),96);RoundRect(dc,bounds.left,bounds.top,bounds.right,bounds.bottom,radius,radius);
+    SelectObject(dc,oldBrush);SelectObject(dc,oldPen);DeleteObject(pen);
 }
 bool usesDarkTheme(HWND window) { auto t=theme(window); return t && t->dark; }
 HBRUSH dialogBackground(HWND window) { auto t=theme(window); return t ? t->background : GetSysColorBrush(COLOR_3DFACE); }

@@ -1,0 +1,4 @@
+201 RCDATA "@CMAKE_CURRENT_SOURCE_DIR@/src/reader.html"
+202 RCDATA "@epubjs_SOURCE_DIR@/dist/epub.min.js"
+203 RCDATA "@jszip_SOURCE_DIR@/dist/jszip.min.js"
+204 RCDATA "@docxpreview_SOURCE_DIR@/dist/docx-preview.min.js"

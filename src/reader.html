@@ -1,0 +1,234 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+html,body,#book{margin:0;width:100%;height:100%;overflow:hidden;background:white}
+#book{opacity:0}
+</style></head><body><div id="book"></div>
+<script src="/jszip.js"></script><script src="/epub.js"></script><script>
+'use strict';
+let book, rendition, busy=false, locationCfi, anchorCfi, updateAnchor=true;
+let firstReadingIndex=0;
+let htmlFrame, htmlAnchor, htmlOffset=0, readerTheme='light';
+const scrollbarStyles=new WeakMap();
+function themeScrollbars(doc) {
+  let style=scrollbarStyles.get(doc);
+  if(!style){style=doc.createElement('style');scrollbarStyles.set(doc,style);(doc.head||doc.documentElement).append(style);}
+  const dark=readerTheme==='dark';
+  style.textContent=`*{scrollbar-color:auto!important;scrollbar-width:auto!important}
+    *::-webkit-scrollbar{width:14px!important;height:14px!important;background:${dark?'#202020':'#fff'}!important}
+    *::-webkit-scrollbar-thumb{background:${dark?'#787878':'#a0a0a0'}!important;border:4px solid ${dark?'#202020':'#fff'}!important;border-radius:9px!important}
+    *::-webkit-scrollbar-thumb:active{background:${dark?'#bebebe':'#606060'}!important}
+    *::-webkit-scrollbar-button{display:none!important}*::-webkit-scrollbar-corner{background:${dark?'#202020':'#fff'}!important}
+    @media(forced-colors:active){*{scrollbar-color:ButtonText Canvas!important}}`;
+}
+
+function htmlState() {
+  const win=htmlFrame.contentWindow,doc=win.document,root=doc.scrollingElement;
+  send('state:'+(root.scrollTop<=1?'1':'0')+(root.scrollTop+win.innerHeight>=root.scrollHeight-1?'1':'0'));
+  // Retain a text position, not a percentage of a changing document height.
+  try {htmlAnchor=doc.caretRangeFromPoint(24,24);htmlOffset=htmlAnchor?.getBoundingClientRect().top||0;}catch{}
+}
+function restoreHtml() {
+  if(htmlAnchor){try{htmlFrame.contentWindow.scrollBy(0,htmlAnchor.getBoundingClientRect().top-htmlOffset);}catch{}}
+  htmlState();
+}
+function openHtml(rendered) {
+  htmlFrame=document.createElement('iframe');
+  htmlFrame.setAttribute('sandbox','allow-same-origin');
+  htmlFrame.setAttribute('title',rendered?'Word document':'HTML document');
+  htmlFrame.style.cssText='border:0;display:block;width:100%;height:100%;background:white';
+  htmlFrame.onload=async()=>{
+    try {
+      const doc=htmlFrame.contentDocument,win=htmlFrame.contentWindow;
+      if(!doc.body)throw new Error('Empty document');
+      if(rendered){doc.head.append(...Array.from(rendered.head.childNodes, node=>doc.importNode(node,true)));doc.body.append(...Array.from(rendered.body.childNodes,node=>doc.importNode(node,true)));}
+      themeScrollbars(doc);
+      doc.addEventListener('keydown',key);
+      doc.addEventListener('click',event=>{if(event.target.closest('a'))event.preventDefault();},true);
+      doc.addEventListener('submit',event=>event.preventDefault(),true);
+      doc.addEventListener('mousemove',event=>send('pointer:'+event.clientX+','+event.clientY));
+      win.addEventListener('scroll',htmlState,{passive:true});
+      doc.addEventListener('load',restoreHtml,true);
+      new ResizeObserver(()=>requestAnimationFrame(restoreHtml)).observe(doc.body);
+      await contentReady([doc]);document.getElementById('book').style.opacity='1';htmlState();await painted();send('ready');
+    }catch{fail();}
+  };
+  if(rendered)htmlFrame.srcdoc=`<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; object-src 'none'; frame-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'"><body></body>`;
+  else htmlFrame.src='/document.html';
+  document.getElementById('book').append(htmlFrame);
+}
+function sanitizeRenderedDocument(rendered) {
+  rendered.querySelectorAll('script,iframe,object,embed,form,base,link,meta,foreignObject').forEach(node=>node.remove());
+  rendered.querySelectorAll('*').forEach(node=>Array.from(node.attributes).forEach(attribute=>{
+    const name=attribute.name.toLowerCase(),value=attribute.value.trim().toLowerCase();
+    const embeddedSvgImage=node.localName==='image'&&['href','xlink:href'].includes(name)&&value.startsWith('data:image/');
+    if(name.startsWith('on')||(['href','xlink:href','srcdoc','action','formaction'].includes(name)&&!embeddedSvgImage))node.removeAttribute(attribute.name);
+    if(['src','poster'].includes(name)&&!value.startsWith('data:image/'))node.removeAttribute(attribute.name);
+  }));
+}
+async function openDocx() {
+  try {
+    await new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='/docx.js';script.onload=resolve;script.onerror=reject;document.head.append(script);});
+    const response=await fetch('/document.docx');if(!response.ok)throw new Error('Unavailable document');
+    const data=await response.arrayBuffer();
+    // All decompression and layout happens in the budgeted renderer process.
+    const archive=await JSZip.loadAsync(data);
+    const entries=Object.values(archive.files);
+    if(entries.length>10000||!archive.file('word/document.xml'))throw new Error('Unsupported document');
+    for(const entry of entries){
+      const name=entry.unsafeOriginalName||entry.name;
+      if(name.startsWith('/')||name.includes('\\')||name.split('/').includes('..'))throw new Error('Invalid archive path');
+    }
+    const xml=await archive.file('word/document.xml').async('string');
+    if(/<!DOCTYPE/i.test(xml))throw new Error('Unsupported XML');
+    const parsed=new DOMParser().parseFromString(xml,'application/xml');
+    if(parsed.querySelector('parsererror')||parsed.documentElement.localName!=='document')throw new Error('Invalid document');
+    const rendered=document.implementation.createHTMLDocument('Word document');
+    await docx.renderAsync(data,rendered.body,rendered.head,{inWrapper:true,ignoreWidth:true,ignoreHeight:true,breakPages:true,ignoreLastRenderedPageBreak:true,useBase64URL:true,renderAltChunks:false,renderComments:false,renderChanges:false,experimental:false});
+    sanitizeRenderedDocument(rendered);
+    const style=rendered.createElement('style');
+    style.textContent='html,body{margin:0;background:white} .docx-wrapper{padding:16px!important;background:white!important} section.docx{box-sizing:border-box;max-width:100%;height:auto!important;min-height:0!important;overflow:visible!important;padding:24px!important;margin-bottom:24px!important} article{overflow:visible!important} img,svg{max-width:100%;height:auto} table{max-width:100%}';
+    rendered.head.append(style);
+    openHtml(rendered);
+  }catch{fail();}
+}
+const send = message => chrome.webview.postMessage(message);
+const fail = () => {busy=false;send('error');};
+const painted=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+async function contentReady(documents){
+  await Promise.all(documents.map(async doc=>{
+    if(doc.fonts)await doc.fonts.ready;
+    await Promise.all(Array.from(doc.images,image=>image.decode?image.decode().catch(()=>{}):Promise.resolve()));
+  }));
+  await painted();
+}
+function report(location) {
+  locationCfi=location.start.cfi;
+  if(updateAnchor || !anchorCfi) {anchorCfi=locationCfi;updateAnchor=false;}
+  const atStart=location.atStart||(location.start.index===firstReadingIndex&&location.start.displayed.page===1);
+  send('state:'+(atStart?'1':'0')+(location.atEnd?'1':'0'));
+}
+function repeatsCover(contents, coverUrl) {
+  if(!coverUrl||!contents)return false;
+  const doc=contents.document,body=doc.body;
+  if(!body||body.textContent.trim())return false;
+  const images=body.querySelectorAll('img,image');
+  if(images.length!==1||body.querySelector('video,audio,canvas,svg path,svg text,svg rect,svg circle,svg polygon,svg use,svg foreignObject'))return false;
+  const image=images[0];
+  if(image.hasAttribute('srcset'))return false;
+  if([...body.querySelectorAll('svg *')].some(node=>!['g','image'].includes(node.localName)))return false;
+  if([...body.querySelectorAll('svg,image')].some(node=>node.hasAttribute('transform')||(node.getAttribute('preserveAspectRatio')||'').includes('slice')))return false;
+  const source=image.getAttribute('src')||image.getAttribute('href')||image.getAttributeNS('http://www.w3.org/1999/xlink','href');
+  if(!source)return false;
+  try {
+    const actual=new URL(source,doc.baseURI),cover=new URL(coverUrl);
+    if(actual.origin!==cover.origin||decodeURIComponent(actual.pathname)!==decodeURIComponent(cover.pathname))return false;
+    // Keep ambiguous pages: generated text or additional background artwork may
+    // contain publisher content even when the DOM has only one image.
+    for(const node of [body,...body.querySelectorAll('*')]) {
+      const style=doc.defaultView.getComputedStyle(node);
+      if(style.backgroundImage!=='none'||style.transform!=='none'||style.clipPath!=='none'||style.filter!=='none'||style.objectFit==='cover')return false;
+      for(const pseudo of ['::before','::after']) {
+        const content=doc.defaultView.getComputedStyle(node,pseudo).content;
+        if(content&&!['none','normal','""',"''"].includes(content))return false;
+      }
+    }
+    return true;
+  } catch {return false;}
+}
+async function openBook(url,coverUrl) {
+  try {
+    book=ePub(url,{openAs:'opf',replacements:'none'});
+    await book.ready;
+    rendition=book.renderTo('book',{width:innerWidth,height:innerHeight,spread:'none',flow:'paginated',allowScriptedContent:false,allowPopups:false});
+    // The iframe sandbox blocks book scripts. CSP additionally restricts all resources.
+    book.spine.hooks.content.register((document,section) => {
+      const policy=document.createElement('meta');
+      policy.setAttribute('http-equiv','Content-Security-Policy');
+      policy.setAttribute('content',"default-src 'none'; script-src 'none'; style-src 'unsafe-inline' https://book.invalid; img-src https://book.invalid data:; font-src https://book.invalid data:; media-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri https://book.invalid");
+      const head=document.querySelector('head'); if(head) head.insertBefore(policy,head.firstChild);
+      document.querySelectorAll('script,iframe,object,embed,form,base,meta[http-equiv="refresh"]').forEach(node=>node.remove());
+      const base=document.createElement('base');base.setAttribute('href',section.url);if(head)head.insertBefore(base,head.firstChild);
+      document.querySelectorAll('*').forEach(node=>Array.from(node.attributes).forEach(a=>{if(a.name.toLowerCase().startsWith('on'))node.removeAttribute(a.name);}));
+    });
+    rendition.on('relocated',report);
+    rendition.on('displayError',fail);
+    rendition.hooks.content.register(contents=>{
+      themeScrollbars(contents.document);
+      contents.document.addEventListener('keydown',key);
+      // Links are not a navigation surface in this bounded page reader.
+      contents.document.addEventListener('click',event=>{if(event.target.closest('a'))event.preventDefault();},true);
+      contents.document.addEventListener('mousemove',event=>{
+        // Paginated iframes can be wider than the viewport; fixed pages may be scaled.
+        const frame=contents.document.defaultView.frameElement, rect=frame.getBoundingClientRect();
+        const x=rect.left+event.clientX*rect.width/frame.clientWidth;
+        const y=rect.top+event.clientY*rect.height/frame.clientHeight;
+        send('pointer:'+Math.round(x)+','+Math.round(y));
+      });
+    });
+    await rendition.display();
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    const location=rendition.currentLocation(),first=book.spine.get();
+    firstReadingIndex=first.index;
+    const next=first.next();
+    if(next&&location?.start.index===first.index&&location.start.displayed.total===1&&repeatsCover(rendition.getContents()[0],coverUrl)) {
+      firstReadingIndex=next.index;updateAnchor=true;anchorCfi=undefined;
+      await rendition.display(next.href);
+    }
+    // Keep the provisional cover invisible, then let the chosen section paint
+    // before asking the native host to uncover the WebView.
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    document.getElementById('book').style.opacity='1';
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    await contentReady(rendition.getContents().map(content=>content.document));
+    // Fullscreen can change while the initial section is still loading.
+    // Settle the latest viewport before the host reveals it.
+    while(rendition.settings.width!==innerWidth||rendition.settings.height!==innerHeight){
+      await resizeReader();await contentReady(rendition.getContents().map(content=>content.document));
+    }
+    send('ready');
+  } catch(error) { fail(); }
+}
+async function turn(direction) {
+  if(htmlFrame){htmlFrame.contentWindow.scrollBy(0,direction*Math.max(1,htmlFrame.clientHeight-24));htmlState();return;}
+  if(!rendition) throw new Error('Reader unavailable');
+  busy=true;
+  updateAnchor=true;
+  await (direction>0?rendition.next():rendition.prev());
+  busy=false;
+}
+function key(event) {
+  if(['ArrowLeft','ArrowRight','F11','Escape','Tab'].includes(event.key)) {
+    event.preventDefault(); send('key:'+event.key+(event.shiftKey?':shift':''));
+  }
+}
+document.addEventListener('keydown',key);
+document.addEventListener('mousemove',event=>send('pointer:'+event.clientX+','+event.clientY));
+// Native size changes and page turns share a serialized, acknowledged bridge.
+// Identities are opaque strings; the native session rejects stale completion.
+let operations=Promise.resolve();
+async function resizeReader() {
+  if(htmlFrame)restoreHtml();
+  else if(rendition){rendition.resize(innerWidth,innerHeight,anchorCfi);await rendition.display(anchorCfi);}
+}
+function operation(id,command){
+  operations=operations.then(async()=>{
+    try{
+      if(command==='resize')await resizeReader();
+      else if(command==='next'||command==='previous')await turn(command==='next'?1:-1);
+      else throw new Error('Unknown operation');
+      await contentReady(htmlFrame?[htmlFrame.contentDocument]:rendition.getContents().map(content=>content.document));
+      if(htmlFrame)htmlState();
+      busy=false;send('done:'+id);
+    }catch{busy=false;send('failed:'+id);}
+  });
+}
+chrome.webview.addEventListener('message',async event=>{
+  const message=event.data;
+  if(message.startsWith('theme:')){readerTheme=message.slice(6);themeScrollbars(document);if(htmlFrame?.contentDocument)themeScrollbars(htmlFrame.contentDocument);if(rendition)rendition.getContents().forEach(content=>themeScrollbars(content.document));}
+  else if(message==='open-html')openHtml();
+  else if(message==='open-docx')await openDocx();
+  else if(message.startsWith('open:')) await openBook(...message.slice(5).split('\n'));
+  else if(message.startsWith('op:')){const match=/^op:([0-9]+):(next|previous|resize)$/.exec(message);if(match)operation(match[1],match[2]);}
+});
+send('host-ready');
+</script></body></html>

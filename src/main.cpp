@@ -25,6 +25,7 @@ namespace books {
 static bool previewOnly=false;
 static constexpr wchar_t InstanceClass[]=L"VolturaBooks.Instance";
 static constexpr UINT IncomingFiles=WM_APP+70;
+static constexpr UINT BrowseRequest=WM_APP+72;
 static HWND dropWindow=nullptr;
 static bool sendingQueue=false,confirmingIncoming=false;
 static std::vector<fs::path> pendingFiles;
@@ -41,6 +42,17 @@ static HWND foregroundDialog() {
 static LRESULT CALLBACK instanceProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
     if(message==WM_COPYDATA) {
         auto data=reinterpret_cast<const COPYDATASTRUCT*>(lp);
+        if(data && data->dwData==2) {
+            if(data->cbData!=sizeof(DWORD) || !data->lpData)return FALSE;
+            DWORD testSending=0;memcpy(&testSending,data->lpData,sizeof(testSending));
+            if(testSending>1)return FALSE;
+            const bool launcherReady=dropWindow && IsWindowVisible(dropWindow) && IsWindowEnabled(dropWindow);
+            // Never change the mode of an open browser or an in-flight queue.
+            if(!launcherReady && previewOnly!=(testSending!=0))return 2;
+            foregroundDialog();
+            if(launcherReady)return PostMessageW(dropWindow,BrowseRequest,testSending,0);
+            return TRUE;
+        }
         if(!data || data->dwData!=1 || !data->lpData || data->cbData<sizeof(wchar_t) || data->cbData>1024*1024 || data->cbData%sizeof(wchar_t)) return FALSE;
         auto text=static_cast<const wchar_t*>(data->lpData); size_t count=data->cbData/sizeof(wchar_t);
         if(text[count-1]) return FALSE;
@@ -64,7 +76,7 @@ static LRESULT CALLBACK instanceProc(HWND window,UINT message,WPARAM wp,LPARAM l
         }
         if(sendingQueue) {
             confirmingIncoming=true;
-            auto answer=themedMessageBox(owner,previewOnly ? L"Add these files after the current previews? No emails will be sent." : L"Add these files after the current books?",L"Voltura Books",MB_YESNO|MB_ICONQUESTION);
+            auto answer=themedMessageBox(owner,previewOnly ? L"Add these files after the current sending tests? No emails will be sent." : L"Add these files after the current books?",L"Voltura Books",MB_YESNO|MB_ICONQUESTION);
             confirmingIncoming=false;
             for(auto& request:deferredRequests) if(PostMessageW(window,IncomingFiles,0,reinterpret_cast<LPARAM>(request.get()))) request.release();
             deferredRequests.clear();
@@ -250,7 +262,7 @@ static void advancedLayout(HWND window, bool expanded) {
     InvalidateRect(GetDlgItem(window,IDC_SETTINGS_SCROLL),nullptr,FALSE);
     RECT bar{430,0,438,0}; MapDialogRect(window,&bar);
     SetWindowPos(GetDlgItem(window,IDC_SETTINGS_SCROLL),nullptr,bar.left,0,bar.right-bar.left,height-frameHeight,SWP_NOZORDER);
-    ShowWindow(GetDlgItem(window,IDC_SETTINGS_SCROLL),scroll.nPage<units.bottom ? SW_SHOW : SW_HIDE);
+    ShowWindow(GetDlgItem(window,IDC_SETTINGS_SCROLL),static_cast<int>(scroll.nPage)<units.bottom ? SW_SHOW : SW_HIDE);
     InvalidateRect(window,nullptr,FALSE);
 }
 static void paintSettingsPanels(HWND window) {
@@ -524,16 +536,16 @@ struct SendDialog {
 static bool beginSend(HWND window, SendDialog& state) {
     if(state.simulated) {
         state.cancel=false; state.busy=true;
-        SetWindowTextW(window,L"Voltura Books - Preview (no email)");
-        SetDlgItemTextW(window,IDC_HEADING,L"Preview: sending to Kindle");
-        auto progress=state.bookCount>1 ? L"Previewing book "+std::to_wstring(state.bookNumber)+L" of "+std::to_wstring(state.bookCount)+L"..." : L"Previewing your book...";
+        SetWindowTextW(window,L"Voltura Books - Test sending (no emails sent)");
+        SetDlgItemTextW(window,IDC_HEADING,L"Testing sending");
+        auto progress=state.bookCount>1 ? L"Testing sending book "+std::to_wstring(state.bookNumber)+L" of "+std::to_wstring(state.bookCount)+L"..." : L"Testing sending...";
         SetDlgItemTextW(window,IDC_STATUS,progress.c_str());
         SetDlgItemTextW(window,IDC_SEND_HELP,L"Simulation only. No email will be sent.");
         for(auto id:{IDC_SETTINGS,IDC_RETRY,IDC_SKIP}) EnableWindow(GetDlgItem(window,id),FALSE);
         SendDlgItemMessageW(window,IDC_PROGRESS,PBM_SETMARQUEE,TRUE,25);
         state.worker=std::thread([window,&state] {
             for(int i=0;i<80 && !state.cancel;++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            state.result={ !state.cancel, state.cancel ? L"Preview cancelled. No email was sent." : L"Preview complete. No email was sent." };
+            state.result={ !state.cancel, state.cancel ? L"Sending test cancelled. No email was sent." : L"Sending test complete. No email was sent." };
             PostMessageW(window,SendComplete,0,0);
         });
         return true;
@@ -627,7 +639,7 @@ static INT_PTR CALLBACK sendProc(HWND window, UINT message, WPARAM wparam, LPARA
             if (state->worker.joinable()) state->worker.join(); state->busy = false;
             ShowWindow(GetDlgItem(window, IDC_PROGRESS), SW_HIDE);
             SetDlgItemTextW(window, IDC_STATUS, state->result.message.c_str());
-            SetDlgItemTextW(window,IDC_HEADING,state->simulated ? L"Preview complete" : state->result.success ? L"Email sent" : L"Sending needs attention");
+            SetDlgItemTextW(window,IDC_HEADING,state->simulated ? L"Sending test complete" : state->result.success ? L"Email sent" : L"Sending needs attention");
             SetDlgItemTextW(window,IDC_SEND_HELP,state->simulated ? L"No emails sent. Your sent-book history is unchanged." : state->result.success ? L"Kindle delivery may take a few minutes." : L"Check the message above before trying again.");
             SetDlgItemTextW(window, IDCANCEL, L"Close"); EnableWindow(GetDlgItem(window, IDCANCEL), TRUE);
             EnableWindow(GetDlgItem(window, IDC_SETTINGS), !state->result.success && !state->simulated);
@@ -658,17 +670,24 @@ static INT_PTR CALLBACK dropProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             dropWindow=window;
             SetWindowLongPtrW(window,DWLP_USER,lp); setBookIcon(window); DragAcceptFiles(window,TRUE);
             CheckDlgButton(window,IDC_PREVIEW_MODE,previewOnly ? BST_CHECKED : BST_UNCHECKED);
-            if(previewOnly) { SetWindowTextW(window,L"Voltura Books - Preview (no email)"); SetDlgItemTextW(window,IDC_APPROVAL_HELP,L"Preview only. No emails sent and no history saved."); }
+            if(previewOnly) { SetWindowTextW(window,L"Voltura Books - Test sending (no emails sent)"); SetDlgItemTextW(window,IDC_APPROVAL_HELP,L"Simulates sending. No emails are sent and no history is saved."); }
             SetFocus(GetDlgItem(window,IDC_CHOOSE_BOOK)); return FALSE;
         }
         if(message==WM_DESTROY) dropWindow=nullptr;
+        if(message==BrowseRequest) {
+            if(!IsWindowEnabled(window))return TRUE;
+            CheckDlgButton(window,IDC_PREVIEW_MODE,wp ? BST_CHECKED : BST_UNCHECKED);
+            SendMessageW(window,WM_COMMAND,IDC_PREVIEW_MODE,0);
+            SendMessageW(window,WM_COMMAND,IDC_BROWSE_FOLDER,0);
+            return TRUE;
+        }
         if(message==IncomingFiles && path && !pendingFiles.empty()) {
             *path=std::move(pendingFiles); pendingFiles.clear(); EndDialog(window,IDOK); return TRUE;
         }
         if(message==WM_COMMAND && LOWORD(wp)==IDC_PREVIEW_MODE) {
             previewOnly=IsDlgButtonChecked(window,IDC_PREVIEW_MODE)==BST_CHECKED;
-            SetWindowTextW(window,previewOnly ? L"Voltura Books - Preview (no email)" : L"Voltura Books - Send a book");
-            SetDlgItemTextW(window,IDC_APPROVAL_HELP,previewOnly ? L"Preview only. No emails sent and no history saved." : L"One email per book. Up to 50 MB per file."); return TRUE;
+            SetWindowTextW(window,previewOnly ? L"Voltura Books - Test sending (no emails sent)" : L"Voltura Books - Send a book");
+            SetDlgItemTextW(window,IDC_APPROVAL_HELP,previewOnly ? L"Simulates sending. No emails are sent and no history is saved." : L"One email per book. Up to 50 MB per file."); return TRUE;
         }
         auto accept=[&](const fs::path& candidate) {
             if(auto validation=validateFile(candidate); !validation.empty()) { error(window,validation); return; }
@@ -681,6 +700,7 @@ static INT_PTR CALLBACK dropProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
         if(message==WM_COMMAND && LOWORD(wp)==IDC_BROWSE_FOLDER) {
             auto selection=browseBooks(window,{},previewOnly);
             if(!selection.empty()) { *path=std::move(selection); EndDialog(window,IDOK); }
+            else EndDialog(window,IDCANCEL);
             return TRUE;
         }
         if(message==WM_COMMAND && LOWORD(wp)==IDC_CHOOSE_BOOK) {
@@ -731,7 +751,7 @@ static int sendSelectedBooks(std::vector<fs::path> paths) {
         if(dialog==IDCANCEL) break;
     }
     if(paths.size()>1) {
-        if(previewOnly) { auto summary=std::to_wstring(sent)+L" book previews completed. No emails were sent and no history was saved."; themedMessageBox(nullptr,summary.c_str(),L"Voltura Books - Preview complete",MB_OK|MB_ICONINFORMATION); return 0; }
+        if(previewOnly) { auto summary=std::to_wstring(sent)+L" sending tests completed. No emails were sent and no history was saved."; themedMessageBox(nullptr,summary.c_str(),L"Voltura Books - Sending tests complete",MB_OK|MB_ICONINFORMATION); return 0; }
         auto summary=std::to_wstring(sent)+L" email(s) sent.\n"+std::to_wstring(skipped)+L" book(s) skipped.\n"+
             std::to_wstring(failed)+L" book(s) not confirmed sent.\n"+std::to_wstring(paths.size()-processed)+L" book(s) not started.\n\nKindle delivery may take a few minutes.";
         if(failed) summary+=L"\nCheck your Kindle before retrying an uncertain submission.";
@@ -756,7 +776,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     } catch(const std::exception& e) { error(nullptr,wide(e.what())); curl_global_cleanup(); if(SUCCEEDED(com)) CoUninitialize(); return 1; }
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\VolturaBooks.Application");
     if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
-        bool delivered=false;
+        bool delivered=false,modeConflict=false;
         const bool maintenance=argc==2 && (argv[1]==L"--install" || argv[1]==L"--uninstall");
         if(mutex && !maintenance) {
             HWND existing=nullptr;
@@ -767,11 +787,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 for(const auto& file:launchFiles) { payload+=file.wstring(); payload+=L'\0'; } payload+=L'\0';
                 if(payload.size()*sizeof(wchar_t)<=1024*1024) {
                     COPYDATASTRUCT data{1,static_cast<DWORD>(payload.size()*sizeof(wchar_t)),payload.data()}; DWORD_PTR reply=0;
-                    delivered=SendMessageTimeoutW(existing,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&data),SMTO_ABORTIFHUNG|SMTO_BLOCK,5000,&reply) && reply;
+                    DWORD testSending=argc==3 && argv[2]==L"--test-sending";
+                    const bool browse=argc>=2 && argv[1]==L"--browse";
+                    if(browse)data={2,sizeof(testSending),&testSending};
+                    const bool responded=SendMessageTimeoutW(existing,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&data),SMTO_ABORTIFHUNG|SMTO_BLOCK,5000,&reply)!=0;
+                    modeConflict=responded && browse && reply==2;
+                    delivered=responded && reply==TRUE;
                 }
             }
         }
-        if(!delivered) error(nullptr,maintenance ? L"Close Voltura Books before installing or removing it." : L"The open Voltura Books window is not responding. Close it and try again.");
+        if(!delivered) error(nullptr,modeConflict ? L"Voltura Books is already open in a different sending mode. Close it before opening Browse books in the requested mode." : maintenance ? L"Close Voltura Books before installing or removing it." : L"The open Voltura Books window is not responding. Close it and try again.");
         if (mutex) CloseHandle(mutex); curl_global_cleanup(); if (SUCCEEDED(com)) CoUninitialize(); return delivered ? 0 : 1;
     }
     WNDCLASSW instanceType{}; instanceType.lpfnWndProc=instanceProc; instanceType.hInstance=GetModuleHandleW(nullptr); instanceType.lpszClassName=InstanceClass;
@@ -784,8 +809,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         else if (argc == 2 && argv[1] == L"--uninstall") uninstallApp();
         else if (argc == 2 && argv[1] == L"--settings") {
             auto s=loadSettings(); showSettings(nullptr,s);
-        } else if(argc==1 || (argc==2 && (argv[1]==L"--drop" || argv[1]==L"--preview"))) {
-            previewOnly=argc==2 && argv[1]==L"--preview";
+        } else if((argc==2 && argv[1]==L"--browse") || (argc==3 && argv[1]==L"--browse" && argv[2]==L"--test-sending")) {
+            previewOnly=argc==3;
+            result=sendSelectedBooks(browseBooks(nullptr,{},previewOnly));
+        } else if(argc==1 || (argc==2 && (argv[1]==L"--drop" || argv[1]==L"--test-sending"))) {
+            previewOnly=argc==2 && argv[1]==L"--test-sending";
             std::vector<fs::path> path;
             auto dialog=DialogBoxParamW(GetModuleHandleW(nullptr),MAKEINTRESOURCEW(IDD_DROP),nullptr,dropProc,reinterpret_cast<LPARAM>(&path));
             if(dialog==-1) throw std::runtime_error("Could not open the book window.");
@@ -793,7 +821,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         } else if(argc>=3 && argv[1]==L"--send") {
             result=sendSelectedBooks(launchFiles);
         } else if(argc>=2 && argv[1]==L"--shell") result=sendSelectedBooks(launchFiles);
-        else throw std::runtime_error("Use --send \"book.epub\", --drop, --settings, --install, or --uninstall. You can select several books.");
+        else throw std::runtime_error("Use --send \"book.epub\", --drop, --browse [--test-sending], --test-sending, --settings, --install, or --uninstall. You can select several books.");
         while(!pendingFiles.empty()) { auto next=std::move(pendingFiles); pendingFiles.clear(); result=sendSelectedBooks(std::move(next)); }
 
     } catch (const std::exception& e) { error(nullptr, wide(e.what())); result = 1; }

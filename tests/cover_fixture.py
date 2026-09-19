@@ -45,6 +45,20 @@ with tempfile.TemporaryDirectory(prefix='books-document-preview-') as folder:
     with zipfile.ZipFile(path, 'w') as archive:
         archive.writestr('docProps/thumbnail.png', buffer.getvalue())
     assert subprocess.run([str(probe), str(path)], capture_output=True, timeout=30).returncode == 0
+    for name, color, image_format, expected in [
+        ('white', 'white', 'JPEG', 1),
+        ('near-white', (252, 252, 252), 'JPEG', 1),
+        ('transparent', (0, 0, 0, 0), 'PNG', 1),
+        ('content', 'teal', 'PNG', 0),
+    ]:
+        thumbnail = io.BytesIO()
+        Image.new('RGBA' if name == 'transparent' else 'RGB', (395, 512), color).save(thumbnail, format=image_format)
+        path = Path(folder) / (name + '.docx')
+        with zipfile.ZipFile(path, 'w') as archive:
+            archive.writestr('docProps/thumbnail.' + ('jpeg' if image_format == 'JPEG' else 'png'), thumbnail.getvalue())
+        result = subprocess.run([str(probe), str(path)], capture_output=True, timeout=30)
+        assert result.returncode == expected, (name, result.stdout, result.stderr)
+    print('Blank DOCX thumbnails use file-type fallback; visible thumbnails retained')
     for extension in ['rtf', 'txt', 'html', 'doc', 'pdf', 'docx']:
         path = Path(folder) / ('No-preview.' + extension)
         path.write_bytes(b'not a preview')

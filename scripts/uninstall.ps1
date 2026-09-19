@@ -12,7 +12,7 @@ if (!$CleanupPid) {
 if ([IO.Path]::GetFullPath($PSScriptRoot) -ne $expected) { throw 'Unexpected installation directory; refusing cleanup.' }
 $running = Get-Process -Id $CleanupPid -ErrorAction SilentlyContinue
 if ($running) { $running.WaitForExit(30000) | Out-Null; if (!$running.HasExited) { throw 'Application did not exit.' } }
-foreach ($name in @('VolturaBooks.exe', 'THIRD-PARTY-NOTICES.txt', 'README.md', 'LICENSE', 'uninstall.ps1')) {
+foreach ($name in @('VolturaBooks.exe', 'VolturaBooksReader.exe','VolturaBooksDoc.exe','DocSharp.Binary.Doc.dll','DocSharp.Binary.Common.dll','System.IO.Compression.dll', 'THIRD-PARTY-NOTICES.txt', 'README.md', 'LICENSE', 'uninstall.ps1')) {
     $target = [IO.Path]::GetFullPath((Join-Path $expected $name))
     if ([IO.Path]::GetDirectoryName($target) -ne $expected) { throw 'Unexpected cleanup path.' }
     if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force }

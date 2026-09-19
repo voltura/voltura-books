@@ -10,9 +10,31 @@ fs::path localData() {
     if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &value))) throw std::runtime_error("Could not locate application data.");
     fs::path path(value); CoTaskMemFree(value); return path / L"Voltura Books";
 }
+static fs::path settingsPath() { return localData() / L"settings.ini"; }
+fs::path loadBrowseFolder() {
+    std::vector<wchar_t> text(32768);
+    GetPrivateProfileStringW(L"Browse", L"Folder", L"", text.data(), static_cast<DWORD>(text.size()), settingsPath().c_str());
+    return fs::path(text.data());
+}
+void saveBrowseFolder(const fs::path& folder) {
+    auto dir=localData(); fs::create_directories(dir);
+    auto path=settingsPath();
+    HANDLE file=CreateFileW(path.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file!=INVALID_HANDLE_VALUE) {
+        const wchar_t bom=0xfeff; DWORD written=0;
+        bool ok=WriteFile(file,&bom,sizeof(bom),&written,nullptr) && written==sizeof(bom);
+        CloseHandle(file);
+        if(!ok) { DeleteFileW(path.c_str()); throw std::runtime_error("Could not save the Browse books folder."); }
+    } else if(GetLastError()!=ERROR_FILE_EXISTS && GetLastError()!=ERROR_ALREADY_EXISTS) {
+        throw std::runtime_error("Could not save the Browse books folder.");
+    }
+    if(!WritePrivateProfileStringW(L"Browse",L"Folder",folder.c_str(),path.c_str()))
+        throw std::runtime_error("Could not save the Browse books folder.");
+    WritePrivateProfileStringW(nullptr,nullptr,nullptr,path.c_str());
+}
 Settings loadSettings() {
     Settings s;
-    const auto path = localData() / L"settings.ini";
+    const auto path = settingsPath();
     auto read = [&](const wchar_t* key, const wchar_t* fallback) {
         wchar_t text[1024]{};
         GetPrivateProfileStringW(L"Mail", key, fallback, text, 1024, path.c_str());
@@ -48,6 +70,7 @@ static void writePassword(const std::wstring& sender, const std::wstring& passwo
 void saveSettings(const Settings& s, const std::wstring& password) {
     if (!validate(s).empty() || password.size() * sizeof(wchar_t) > CRED_MAX_CREDENTIAL_BLOB_SIZE)
         throw std::runtime_error("Check your settings. Email passwords can contain up to 1,280 characters.");
+    auto browseFolder=loadBrowseFolder();
     auto dir = localData(); fs::create_directories(dir);
     auto target = dir / L"settings.ini", temp = dir / L"settings.pending.ini";
     auto old = loadSettings(); auto oldPassword = s.direct ? std::wstring{} : loadPassword();
@@ -65,6 +88,8 @@ void saveSettings(const Settings& s, const std::wstring& password) {
         write(L"Kindle", s.kindle); write(L"Sender", s.sender); write(L"Host", s.host);
         write(L"Port", std::to_wstring(s.port)); write(L"Security", s.startTls ? L"STARTTLS" : L"TLS");
         write(L"Method", s.direct ? L"Direct" : L"Provider");
+        if(!browseFolder.empty() && !WritePrivateProfileStringW(L"Browse",L"Folder",browseFolder.c_str(),temp.c_str()))
+            throw std::runtime_error("Could not write settings.");
         WritePrivateProfileStringW(nullptr, nullptr, nullptr, temp.c_str());
         if (!s.direct) {
             if(password.empty()) {
@@ -95,6 +120,8 @@ void removeSettings() {
     std::error_code error;
     fs::remove_all(localData() / L"Updates",error);
     if(error) throw std::runtime_error("Could not remove downloaded updates.");
+    fs::remove_all(localData() / L"Reader",error);
+    if(error) throw std::runtime_error("Could not remove the book reader cache. Close Voltura Books and try again.");
     RemoveDirectoryW(localData().c_str());
 }
 }

@@ -1,8 +1,9 @@
 #Requires -Version 7.0
 [CmdletBinding()]
-param([string]$Version, [switch]$PrepareOnly, [string]$KeyPath = $env:BOOKS_KEYPATH)
+param([string]$Version, [switch]$PrepareOnly, [switch]$InteractiveTests, [string]$KeyPath = $env:BOOKS_KEYPATH)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if (!$InteractiveTests) { throw 'Release validation includes visible UI/fullscreen tests. Run on an available desktop with -InteractiveTests to explicitly opt in.' }
 $root = Split-Path $PSScriptRoot -Parent
 $repository = 'voltura/voltura-books'
 function Invoke-Checked([string]$Program, [string[]]$Arguments) {
@@ -48,7 +49,9 @@ try {
     }
     if (!$KeyPath -or !(Test-Path -LiteralPath $KeyPath)) { throw 'Set BOOKS_KEYPATH to the encrypted Books signing key.' }
     Phase 'Build and test'
-    & "$PSScriptRoot/build.ps1"
+    & "$PSScriptRoot/build.ps1" -Test core,drop,mail_setup,settings_cleanup,history,rtf_fit,docx_text,doc_conversion,doc_format,reader_loading,reader_bridge,reader_native_loading,instance_forwarding
+    foreach ($test in @('browser','queue','edit_layout','shell_selection')) { & "$PSScriptRoot/test-ui.ps1" -Test $test }
+    & "$PSScriptRoot/test-ui.ps1" -Test reader -ReaderFormat all
     Invoke-Checked python @('tests/smtp_fixture.py')
     Invoke-Checked python @('tests/cover_fixture.py')
     Phase 'Package'
@@ -59,7 +62,7 @@ try {
     $installer = Join-Path $output "VolturaBooks-Setup-$Version-win-x64.exe"
     Copy-Item dist/VolturaBooks-Setup.exe $installer
     $zip = Join-Path $output "VolturaBooks-$Version-win-x64.zip"
-    $files = @('VolturaBooks.exe','README.md','LICENSE','THIRD-PARTY-NOTICES.txt','install.ps1','uninstall.ps1') | ForEach-Object { Join-Path "$root/dist" $_ }
+    $files = @('VolturaBooks.exe','VolturaBooksReader.exe','VolturaBooksDoc.exe','DocSharp.Binary.Doc.dll','DocSharp.Binary.Common.dll','System.IO.Compression.dll','README.md','LICENSE','THIRD-PARTY-NOTICES.txt','install.ps1','uninstall.ps1') | ForEach-Object { Join-Path "$root/dist" $_ }
     Compress-Archive -LiteralPath $files -DestinationPath $zip
     & "$PSScriptRoot/sign-update.ps1" -Version $Version -Directory $output -KeyPath $KeyPath
     $manifest = Join-Path $output "VolturaBooks-Update-$Version.json"

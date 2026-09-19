@@ -98,7 +98,7 @@ std::string resolve(const std::string& base, const std::wstring& href) {
     for(const auto& p:parts) { if(!path.empty()) path+='/'; path+=p; }
     return path;
 }
-Bytes coverBytes(Zip& zip) {
+Bytes coverBytes(Zip& zip,std::string* selectedPath=nullptr) {
     constexpr size_t XmlLimit=1024*1024, ImageLimit=8*1024*1024;
     std::string package;
     if (!xml(zip.read("META-INF/container.xml",XmlLimit), [&](const auto& name,const auto& a) {
@@ -111,7 +111,7 @@ Bytes coverBytes(Zip& zip) {
         if(name==L"item") items.push_back({attr(a,L"id"),attr(a,L"href"),attr(a,L"media-type"),attr(a,L"properties")});
         if(name==L"reference" && attr(a,L"type")==L"cover") guide=attr(a,L"href");
     })) return {};
-    auto getImage=[&](const std::wstring& href) { return zip.read(resolve(package,href),ImageLimit); };
+    auto getImage=[&](const std::wstring& href) { auto path=resolve(package,href);auto bytes=zip.read(path,ImageLimit);if(selectedPath&&!bytes.empty())*selectedPath=path;return bytes; };
     for(const auto& item:items) {
         std::wistringstream properties(item.properties); std::wstring token;
         while(properties>>token) if(token==L"cover-image") { auto bytes=getImage(item.href); if(!bytes.empty()) return bytes; }
@@ -123,7 +123,7 @@ Bytes coverBytes(Zip& zip) {
             if(image.empty() && name==L"img") image=attr(a,L"src");
             if(image.empty() && name==L"image") image=attr(a,L"href");
         });
-        if(!image.empty()) return zip.read(resolve(page,image),ImageLimit);
+        if(!image.empty()){auto path=resolve(page,image);auto bytes=zip.read(path,ImageLimit);if(selectedPath&&!bytes.empty())*selectedPath=path;return bytes;}
     }
     return {};
 }
@@ -191,9 +191,9 @@ BookDetails loadBookDetails(const std::filesystem::path& file) noexcept {
     return details;
 }
 
-HBITMAP loadCover(const std::filesystem::path& epub, int width, int height) noexcept {
+static HBITMAP loadImage(const std::filesystem::path& epub, int width, int height, unsigned pageIndex) noexcept {
     try {
-        if(width<=0 || height<=0 || width>2048 || height>2048) return nullptr;
+        if(width<=0 || height<=0 || width>16384 || height>16384 || static_cast<uint64_t>(width)*height>64000000) return nullptr;
         auto format=fileFormat(epub.extension().wstring()); if(!format) return nullptr;
         ComPtr<IWICImagingFactory> factory;
         if(FAILED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&factory)))) return nullptr;
@@ -205,8 +205,8 @@ HBITMAP loadCover(const std::filesystem::path& epub, int width, int height) noex
             using namespace winrt::Windows;
             auto file=Storage::StorageFile::GetFileFromPathAsync(epub.wstring()).get();
             auto document=Data::Pdf::PdfDocument::LoadFromFileAsync(file).get();
-            if(!document.PageCount()) return nullptr;
-            auto page=document.GetPage(0); auto size=page.Size();
+            if(pageIndex>=document.PageCount() || document.IsPasswordProtected()) return nullptr;
+            auto page=document.GetPage(pageIndex); auto size=page.Size();
             if(size.Width<=0 || size.Height<=0) return nullptr;
             const double scale=(std::min)(width/size.Width,height/size.Height);
             Data::Pdf::PdfPageRenderOptions options;
@@ -240,7 +240,59 @@ HBITMAP loadCover(const std::filesystem::path& epub, int width, int height) noex
         HBITMAP bitmap=CreateDIBSection(nullptr,&info,DIB_RGB_COLORS,&pixels,nullptr,0);
         if(!bitmap) return nullptr;
         if(FAILED(converter->CopyPixels(nullptr,tw*4,tw*th*4,static_cast<BYTE*>(pixels)))) { DeleteObject(bitmap); return nullptr; }
+        if(std::wstring(format->extension)==L".docx") {
+            // Some document generators package an empty white-page thumbnail.
+            // Keep the file-type fallback instead of presenting that as content.
+            const auto data=static_cast<const BYTE*>(pixels);
+            bool blank=true;
+            for(size_t i=0;i<static_cast<size_t>(tw)*th;++i) {
+                const auto pixel=data+i*4;
+                const int background=255-pixel[3]; // Premultiplied alpha over white.
+                if(pixel[0]+background<250 || pixel[1]+background<250 || pixel[2]+background<250) { blank=false; break; }
+            }
+            if(blank) { DeleteObject(bitmap); return nullptr; }
+        }
         return bitmap;
     } catch(...) { return nullptr; }
+}
+HBITMAP loadCover(const std::filesystem::path& file,int width,int height) noexcept {
+    auto format=fileFormat(file.extension().wstring());
+    const bool image=format&&std::string(format->mime).starts_with("image/");
+    // Image previews also serve fullscreen monitors. loadImage enforces the
+    // bounded dimensions and decoded-pixel budget for those larger requests.
+    if(!image&&(width>2048 || height>2048)) return nullptr;
+    return loadImage(file,width,height,0);
+}
+HBITMAP loadPdfPage(const std::filesystem::path& file,unsigned page,int width,int height) noexcept {
+    return loadImage(file,width,height,page);
+}
+std::shared_ptr<EpubResources> loadEpubResources(const std::filesystem::path& file) noexcept {
+    try {
+        if(std::filesystem::file_size(file)>50000000) return {};
+        Zip zip; zip.file=_wfopen(file.c_str(),L"rb");
+        if(!zip.file || !mz_zip_reader_init_cfile(&zip.archive,zip.file,0,0)) return {};
+        auto count=mz_zip_reader_get_num_files(&zip.archive);
+        if(!count || count>10000) return {};
+        auto result=std::make_shared<EpubResources>(); size_t total=0;
+        for(unsigned i=0;i<count;++i) {
+            mz_zip_archive_file_stat entry{};
+            if(!mz_zip_reader_file_stat(&zip.archive,i,&entry) || entry.m_is_encrypted || mz_zip_reader_get_filename(&zip.archive,i,nullptr,0)>sizeof(entry.m_filename)) return {};
+            if(entry.m_is_directory) continue;
+            std::string name=entry.m_filename;
+            if(name.empty() || name.front()=='/' || name.find_first_of("\\:")!=std::string::npos || name.find("../")!=std::string::npos || name==".." || result->files.contains(name)) return {};
+            if(name=="META-INF/encryption.xml") return {}; // No DRM or obfuscated fonts in this reader.
+            if(entry.m_uncomp_size>16*1024*1024 || total+entry.m_uncomp_size>128*1024*1024) return {};
+            total+=static_cast<size_t>(entry.m_uncomp_size);
+            auto& bytes=result->files[name]; bytes.resize(static_cast<size_t>(entry.m_uncomp_size));
+            if(!bytes.empty() && !mz_zip_reader_extract_to_mem(&zip.archive,i,bytes.data(),bytes.size(),0)) return {};
+        }
+        auto container=result->files.find("META-INF/container.xml");
+        if(container==result->files.end() || !xml(container->second,[&](const auto& name,const auto& a){if(name==L"rootfile" && result->package.empty()) result->package=resolve("",attr(a,L"full-path"));})) return {};
+        auto package=result->files.find(result->package);
+        bool spine=false;
+        if(package==result->files.end() || !xml(package->second,[&](const auto& name,const auto&){if(name==L"itemref") spine=true;}) || !spine) return {};
+        coverBytes(zip,&result->coverImage);
+        return result;
+    } catch(...) { return {}; }
 }
 }

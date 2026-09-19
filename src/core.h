@@ -29,6 +29,8 @@ Result sendBook(const Settings&, const std::wstring& password, const fs::path&,
                 std::atomic_bool& cancel, const std::string& caFile = {}, RouteResolver resolver = directMailRoute);
 fs::path localData();
 Settings loadSettings();
+fs::path loadBrowseFolder();
+void saveBrowseFolder(const fs::path& folder);
 std::wstring loadPassword();
 void saveSettings(const Settings&, const std::wstring& password);
 void removeSettings();

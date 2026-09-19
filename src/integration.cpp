@@ -48,11 +48,11 @@ static void shortcut(const fs::path& destination, const fs::path& executable, co
 void installApp() {
     auto source = executablePath().parent_path(), destination = installDir();
     // Check package completeness before registering anything.
-    for (auto name : {L"VolturaBooks.exe", L"uninstall.ps1", L"THIRD-PARTY-NOTICES.txt", L"README.md", L"LICENSE"})
+    for (auto name : {L"VolturaBooks.exe", L"VolturaBooksReader.exe", L"VolturaBooksDoc.exe", L"DocSharp.Binary.Doc.dll", L"DocSharp.Binary.Common.dll", L"System.IO.Compression.dll", L"uninstall.ps1", L"THIRD-PARTY-NOTICES.txt", L"README.md", L"LICENSE"})
         if (!fs::is_regular_file(source / name)) throw std::runtime_error("Install from the complete dist package. Run scripts/build.ps1 first.");
     fs::create_directories(destination);
     if (!fs::equivalent(source, destination)) {
-        for (auto name : {L"VolturaBooks.exe", L"uninstall.ps1", L"THIRD-PARTY-NOTICES.txt", L"README.md", L"LICENSE"})
+        for (auto name : {L"VolturaBooks.exe", L"VolturaBooksReader.exe", L"VolturaBooksDoc.exe", L"DocSharp.Binary.Doc.dll", L"DocSharp.Binary.Common.dll", L"System.IO.Compression.dll", L"uninstall.ps1", L"THIRD-PARTY-NOTICES.txt", L"README.md", L"LICENSE"})
             fs::copy_file(source / name, destination / name, fs::copy_options::overwrite_existing);
     }
     auto executable = destination / L"VolturaBooks.exe";
@@ -76,6 +76,7 @@ void installApp() {
         throw std::runtime_error("Could not remove the previous menu registration.");
     shortcut(folder(FOLDERID_Programs) / L"Voltura Books - Settings.lnk", executable);
     shortcut(folder(FOLDERID_Programs) / L"Voltura Books - Send a book.lnk", executable, L"--drop");
+    shortcut(folder(FOLDERID_Programs) / L"Voltura Books - Browse books.lnk", executable, L"--browse");
     for(auto name : {L"Voltura Books.lnk", L"Voltura Books Settings.lnk"}) {
         auto link = folder(FOLDERID_Programs) / name;
         if(!DeleteFileW(link.c_str()) && GetLastError()!=ERROR_FILE_NOT_FOUND)
@@ -101,7 +102,7 @@ void uninstallApp() {
         if (code != ERROR_SUCCESS && code != ERROR_FILE_NOT_FOUND) throw std::runtime_error("Could not remove Windows registration.");
     }
     removeSettings();
-    for(auto name : {L"Voltura Books - Send a book.lnk", L"Voltura Books - Settings.lnk", L"Voltura Books.lnk", L"Voltura Books Settings.lnk"}) {
+    for(auto name : {L"Voltura Books - Browse books.lnk", L"Voltura Books - Send a book.lnk", L"Voltura Books - Settings.lnk", L"Voltura Books.lnk", L"Voltura Books Settings.lnk"}) {
         auto link=folder(FOLDERID_Programs)/name;
         if(!DeleteFileW(link.c_str()) && GetLastError()!=ERROR_FILE_NOT_FOUND) throw std::runtime_error("Could not remove the Start menu shortcut.");
     }

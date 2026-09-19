@@ -1,3 +1,4 @@
+#include "interactive_test.h"
 #include "shell_selection.h"
 #include <shlobj.h>
 #include <wrl/client.h>
@@ -12,6 +13,7 @@ int wmain(int argc,wchar_t** argv) {
         for(const auto& path:paths) out<<books::utf8(path.wstring())<<'\n';
         return 0;
     }
+    if(!interactiveTestsEnabled())return 77;
     using Microsoft::WRL::ComPtr;
     auto root=books::fs::temp_directory_path()/(L"VolturaBooks-shell-test-"+std::to_wstring(GetCurrentProcessId())); books::fs::create_directories(root);
     auto output=root/L"selection.txt"; std::wstring expected; std::vector<PIDLIST_ABSOLUTE> ids; std::vector<books::fs::path> files;
