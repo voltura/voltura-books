@@ -151,6 +151,7 @@ static void testRefresh(HWND window,books::Browser& state) {
 }
 static void testBrowserMenu(HWND window,books::Browser& state) {
     const auto folder=state.folder,current=state.current;const auto files=state.allFiles;const bool recursive=state.includeSubfolders;
+    const int initialSettings=settingsOpened,initialAbout=aboutOpened,initialUpdate=updateOpened;
     RECT menuButton{},heading{};GetWindowRect(GetDlgItem(window,IDC_BROWSER_MENU),&menuButton);GetWindowRect(GetDlgItem(window,IDC_HEADING),&heading);
     if(menuButton.right>=heading.left||menuButton.top!=heading.top)fail(__LINE__);
     SendDlgItemMessageW(window,IDC_BROWSER_MENU,BM_CLICK,0,0);
@@ -164,14 +165,14 @@ static void testBrowserMenu(HWND window,books::Browser& state) {
     if(GetFocus()!=GetDlgItem(state.menu,IDC_MENU_CHECK_UPDATES))fail(__LINE__);
     SendMessageW(GetDlgItem(state.menu,IDC_MENU_CHECK_UPDATES),WM_KEYDOWN,VK_ESCAPE,0);
     if(state.menu||GetFocus()!=GetDlgItem(window,IDC_BROWSER_MENU))fail(__LINE__);
-    SendDlgItemMessageW(window,IDC_BROWSER_MENU,BM_CLICK,0,0);auto popup=state.menu;
-    SendDlgItemMessageW(window,IDC_BROWSER_MENU,BM_CLICK,0,0);if(state.menu||!popup)fail(__LINE__);
-    SendDlgItemMessageW(window,IDC_BROWSER_MENU,BM_CLICK,0,0);SendMessageW(state.menu,WM_COMMAND,IDC_MENU_SETTINGS,0);
-    if(state.menu||settingsOpened!=1)fail(__LINE__);
-    SendDlgItemMessageW(window,IDC_BROWSER_MENU,BM_CLICK,0,0);SendMessageW(state.menu,WM_COMMAND,IDC_MENU_ABOUT,0);
-    if(state.menu||aboutOpened!=1||updateOpened)fail(__LINE__);
-    SendDlgItemMessageW(window,IDC_BROWSER_MENU,BM_CLICK,0,0);SendMessageW(state.menu,WM_COMMAND,IDC_MENU_CHECK_UPDATES,0);
-    if(state.menu||updateOpened!=1||state.folder!=folder||state.current!=current||state.allFiles!=files||state.includeSubfolders!=recursive)fail(__LINE__);
+    books::showBrowserMenu(window,state);auto popup=state.menu;
+    books::showBrowserMenu(window,state);if(state.menu||!popup)fail(__LINE__);
+    books::showBrowserMenu(window,state);SendMessageW(state.menu,WM_COMMAND,IDC_MENU_SETTINGS,0);
+    if(state.menu||settingsOpened!=initialSettings+1)fail(__LINE__);
+    books::showBrowserMenu(window,state);SendMessageW(state.menu,WM_COMMAND,IDC_MENU_ABOUT,0);
+    if(state.menu||aboutOpened!=initialAbout+1||updateOpened!=initialUpdate)fail(__LINE__);
+    books::showBrowserMenu(window,state);SendMessageW(state.menu,WM_COMMAND,IDC_MENU_CHECK_UPDATES,0);
+    if(state.menu||updateOpened!=initialUpdate+1||state.folder!=folder||state.current!=current||state.allFiles!=files||state.includeSubfolders!=recursive)fail(__LINE__);
 }
 static bool pumpUntil(HWND window,const std::function<bool()>& ready,DWORD timeout=5000) {
     const auto deadline=GetTickCount64()+timeout;
@@ -289,7 +290,7 @@ static INT_PTR CALLBACK testProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             if(!state->tiles || ListView_GetItemCount(GetDlgItem(window,IDC_FILE_GRID))!=3) fail(__LINE__);
             RedrawWindow(GetDlgItem(window,IDC_FILE_GRID),nullptr,nullptr,RDW_INVALIDATE|RDW_UPDATENOW);
             ListView_SetItemState(GetDlgItem(window,IDC_FILE_GRID),1,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
-            if(SendDlgItemMessageW(window,IDC_FILE_LIST,LB_GETSEL,1,0)!=1) fail(__LINE__);
+            if(!pumpUntil(window,[&]{return !state->gridSelectionPending&&SendDlgItemMessageW(window,IDC_FILE_LIST,LB_GETSEL,1,0)==1;})) fail(__LINE__);
             ListView_SetSelectionMark(GetDlgItem(window,IDC_FILE_GRID),0);
             books::rebuildGrid(window,*state);
             if(ListView_GetNextItem(GetDlgItem(window,IDC_FILE_GRID),-1,LVNI_FOCUSED)!=1 || ListView_GetSelectionMark(GetDlgItem(window,IDC_FILE_GRID))!=0 || !(ListView_GetItemState(GetDlgItem(window,IDC_FILE_GRID),1,LVIS_SELECTED)&LVIS_SELECTED)) fail(__LINE__);
