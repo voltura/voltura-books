@@ -55,6 +55,22 @@ async function run(){
   await flush();assert(messages.includes('done:105'),'HTML/DOCX page completion');
   assert.equal(vm.runInContext('root.scrollTop',context),576);
   messages.length=0;vm.runInContext("operation('106','resize')",context);await flush();assert(messages.includes('done:106'),'HTML/DOCX layout completion');
+  vm.runInContext(`
+    let position=500;
+    const savedAnchor={getBoundingClientRect:()=>({top:position-root.scrollTop})};
+    const displacedAnchor={getBoundingClientRect:()=>({top:24})};
+    const win=htmlFrame.contentWindow;
+    win.innerWidth=800;win.document.caretRangeFromPoint=()=>savedAnchor;
+    root.scrollTop=476;htmlState();
+    win.innerWidth=1200;win.innerHeight=900;position=300;root.scrollTop=100;
+    win.document.caretRangeFromPoint=()=>displacedAnchor;htmlState();
+  `,context);
+  assert.equal(vm.runInContext('htmlAnchor===savedAnchor',context),true,'resize scroll retains the reading anchor');
+  vm.runInContext('restoreHtml();htmlState()',context);
+  assert.equal(vm.runInContext('root.scrollTop',context),276,'restore uses the original text position and offset');
+  assert.equal(vm.runInContext('htmlAnchor===savedAnchor',context),true,'restoration scroll does not replace the anchor');
+  vm.runInContext('root.scrollTop+=100;htmlState()',context);
+  assert.equal(vm.runInContext('htmlAnchor===displacedAnchor',context),true,'ordinary scrolling updates the reading anchor');
   console.log('PASS: EPUB and HTML/DOCX completion, image decode, operation queue and errors');
 }
 run().catch(error=>{console.error(error);process.exitCode=1;});
