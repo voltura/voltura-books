@@ -163,7 +163,7 @@ int wmain(int argc,wchar_t** argv) {
         CHECK(waitFor([&]{return !reader->loading;}));
         CHECK(waitFor([&]{return script(reader->web.Get(),L"Math.abs(rendition.manager._stageSize.width - innerWidth) < 1")==L"true";}));
         capture(reader->web.Get(),L"reader-fullscreen.png");
-        books::toggleFullscreen(window,state);CHECK(waitFor([&]{return !reader->loading;}));CHECK(script(reader->web.Get(),L"Math.abs(rendition.manager._stageSize.width - innerWidth) < 1")==L"true");CHECK(script(reader->web.Get(),L"anchorCfi")==anchor);
+        books::toggleFullscreen(window,state);CHECK(waitFor([&]{return !reader->loading;}));CHECK(waitFor([&]{return script(reader->web.Get(),L"Math.abs(rendition.manager._stageSize.width - innerWidth) < 1")==L"true";}));CHECK(script(reader->web.Get(),L"anchorCfi")==anchor);
         for(int i=0;i<150&&!reader->atEnd;++i){auto previous=script(reader->web.Get(),L"locationCfi");reader->navigate(1);CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->atEnd||script(reader->web.Get(),L"locationCfi")!=previous);}
         CHECK(reader->atEnd&&!reader->can(1));CHECK(script(reader->web.Get(),L"document.querySelector('iframe').contentDocument.body.textContent").find(L"Second chapter")!=std::wstring::npos);
     }
