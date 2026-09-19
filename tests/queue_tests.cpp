@@ -16,7 +16,7 @@ fs::path browsedFolder,navigatedFolder;
 HWND hiddenLauncher=nullptr;
 BOOL fixtureVisible(HWND window){return instanceOnly&&window==hiddenLauncher ? TRUE : IsWindowVisible(window);}
 BOOL fixtureEnumWindows(DWORD thread,WNDENUMPROC callback,LPARAM data){return instanceOnly ? TRUE : EnumThreadWindows(thread,callback,data);}
-std::vector<fs::path> fixtureBrowse(HWND owner,const fs::path& folder,bool simulated,bool=false){
+std::vector<fs::path> fixtureBrowse(HWND owner,const fs::path& folder,bool simulated,bool=false,BrowserMenuActions={}){
     if(!instanceOnly)return browseBooks(owner,folder,simulated);
     browsedInTestMode=simulated;browsedFolder=folder;return {};
 }

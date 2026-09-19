@@ -11,10 +11,33 @@
 namespace books {
 namespace {
 struct Check { UpdateResult result; std::atomic<bool> done{false}; };
-struct About { std::shared_ptr<Check> check; };
+struct About { std::shared_ptr<Check> check; bool checkOnOpen=false; };
 void open(HWND window,const wchar_t* url) {
     if(reinterpret_cast<INT_PTR>(ShellExecuteW(window,L"open",url,nullptr,nullptr,SW_SHOWNORMAL))<=32)
         themedMessageBox(window,L"Could not open the link. Please try again.",L"Voltura Books",MB_OK|MB_ICONERROR);
+}
+void showCheckProgress(HWND window) {
+    SetDlgItemTextW(window,IDC_UPDATE_STATUS,L"Checking and downloading updates...");
+    EnableWindow(GetDlgItem(window,IDC_UPDATE_CHECK),FALSE);
+    EnableWindow(GetDlgItem(window,IDC_UPDATE_OPEN),FALSE);
+    SetTimer(window,1,200,nullptr);
+}
+void showCheckResult(HWND window,const Check& check) {
+    SetDlgItemTextW(window,IDC_UPDATE_STATUS,check.result.message.c_str());
+    EnableWindow(GetDlgItem(window,IDC_UPDATE_CHECK),TRUE);
+    EnableWindow(GetDlgItem(window,IDC_UPDATE_OPEN),!check.result.installer.empty());
+}
+void startCheck(HWND window,About& state) {
+    if(state.check && !state.check->done.load()) { showCheckProgress(window); return; }
+    try {
+        auto check=std::make_shared<Check>();
+        std::thread([check]{check->result=downloadUpdate(); check->done.store(true);}).detach();
+        state.check=check;
+        showCheckProgress(window);
+    } catch(...) {
+        SetDlgItemTextW(window,IDC_UPDATE_STATUS,L"Could not start the update check. Please try again.");
+        EnableWindow(GetDlgItem(window,IDC_UPDATE_CHECK),TRUE);
+    }
 }
 INT_PTR CALLBACK aboutProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
     auto state=reinterpret_cast<About*>(GetWindowLongPtrW(window,DWLP_USER));
@@ -24,10 +47,10 @@ INT_PTR CALLBACK aboutProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
         SendMessageW(window,WM_SETICON,ICON_SMALL,reinterpret_cast<LPARAM>(LoadIconW(GetModuleHandleW(nullptr),MAKEINTRESOURCEW(IDI_BOOK))));
         state=reinterpret_cast<About*>(lp);
         EnableWindow(GetDlgItem(window,IDC_UPDATE_OPEN),FALSE);
-        if(state->check) {
-            EnableWindow(GetDlgItem(window,IDC_UPDATE_CHECK),FALSE);
-            SetDlgItemTextW(window,IDC_UPDATE_STATUS,L"Checking and downloading updates...");
-            SetTimer(window,1,200,nullptr);
+        if(state->checkOnOpen) startCheck(window,*state);
+        else if(state->check) {
+            if(state->check->done.load()) showCheckResult(window,*state->check);
+            else showCheckProgress(window);
         }
         return TRUE;
     }
@@ -35,15 +58,7 @@ INT_PTR CALLBACK aboutProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
     if(message==WM_COMMAND) {
         switch(LOWORD(wp)) {
         case IDC_UPDATE_CHECK:
-            if(state->check && !state->check->done.load()) return TRUE;
-            try {
-                auto check=std::make_shared<Check>();
-                std::thread([check]{check->result=downloadUpdate(); check->done.store(true);}).detach();
-                state->check=check;
-                SetDlgItemTextW(window,IDC_UPDATE_STATUS,L"Checking and downloading updates...");
-                EnableWindow(GetDlgItem(window,IDC_UPDATE_CHECK),FALSE); EnableWindow(GetDlgItem(window,IDC_UPDATE_OPEN),FALSE);
-                SetTimer(window,1,200,nullptr);
-            } catch(...) { SetDlgItemTextW(window,IDC_UPDATE_STATUS,L"Could not start the update check. Please try again."); }
+            startCheck(window,*state);
             return TRUE;
         case IDC_UPDATE_OPEN:
             if(state->check && state->check->done.load() && !state->check->result.installer.empty()) {
@@ -64,9 +79,7 @@ INT_PTR CALLBACK aboutProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
         }
     }
     if(message==WM_TIMER && wp==1 && state->check && state->check->done.load()) {
-        KillTimer(window,1); SetDlgItemTextW(window,IDC_UPDATE_STATUS,state->check->result.message.c_str());
-        EnableWindow(GetDlgItem(window,IDC_UPDATE_CHECK),TRUE);
-        EnableWindow(GetDlgItem(window,IDC_UPDATE_OPEN),!state->check->result.installer.empty()); return TRUE;
+        KillTimer(window,1); showCheckResult(window,*state->check); return TRUE;
     }
     if(message==WM_CLOSE) { EndDialog(window,IDCANCEL); return TRUE; }
     if(message==WM_PAINT) {
@@ -85,8 +98,9 @@ INT_PTR CALLBACK aboutProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
     return FALSE;
 }
 }
-bool showAbout(HWND owner) {
+bool showAbout(HWND owner,bool checkForUpdates) {
     static About state;
+    state.checkOnOpen=checkForUpdates;
     return DialogBoxParamW(GetModuleHandleW(nullptr),MAKEINTRESOURCEW(IDD_ABOUT),owner,aboutProc,reinterpret_cast<LPARAM>(&state))==IDOK;
 }
 }

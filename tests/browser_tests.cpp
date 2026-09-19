@@ -8,9 +8,13 @@ static void fixtureSaveBrowseFolder(const fs::path& folder){rememberedByBrowserT
 #include "../src/browser.cpp"
 #undef saveBrowseFolder
 #include <fstream>
+#include <functional>
 #include <iostream>
 static int mode=0,failures=0;
 static void fail(int line) { ++failures; std::cerr<<"Failure at line "<<line<<" in mode "<<mode<<"\n"; }
+static int settingsOpened=0,aboutOpened=0,updateOpened=0;
+static bool testMenuSettings(HWND){++settingsOpened;return true;}
+static bool testMenuAbout(HWND,bool checkForUpdates){if(checkForUpdates)++updateOpened;else ++aboutOpened;return false;}
 static HWND expectedOwner=nullptr;
 static int ownerTestMode=0;
 static bool browserActivated=false;
@@ -102,6 +106,8 @@ static void testRefresh(HWND window,books::Browser& state) {
     if(std::wstring(label)!=L"Refresh")fail(__LINE__);
     wchar_t tooltipText[128]{};TOOLINFOW tool{sizeof(tool)};tool.lpszText=tooltipText;tool.hwnd=window;tool.uId=reinterpret_cast<UINT_PTR>(GetDlgItem(window,IDC_REFRESH));
     if(!SendMessageW(state.tooltip,TTM_GETTOOLINFOW,0,reinterpret_cast<LPARAM>(&tool)) || std::wstring(tool.lpszText)!=L"Refresh (F5)")fail(__LINE__);
+    TOOLINFOW menuTool{sizeof(menuTool)};menuTool.lpszText=tooltipText;menuTool.hwnd=window;menuTool.uId=reinterpret_cast<UINT_PTR>(GetDlgItem(window,IDC_BROWSER_MENU));
+    if(!SendMessageW(state.tooltip,TTM_GETTOOLINFOW,0,reinterpret_cast<LPARAM>(&menuTool)) || std::wstring(menuTool.lpszText)!=L"Menu")fail(__LINE__);
     RECT refresh{},choose{};GetWindowRect(GetDlgItem(window,IDC_REFRESH),&refresh);GetWindowRect(GetDlgItem(window,IDC_FOLDER),&choose);
     if(refresh.right>=choose.left || refresh.top!=choose.top || refresh.bottom!=choose.bottom)fail(__LINE__);
     SendDlgItemMessageW(window,IDC_TYPE_FIRST+1,BM_CLICK,0,0);
@@ -143,11 +149,78 @@ static void testRefresh(HWND window,books::Browser& state) {
     SendDlgItemMessageW(window,IDC_SORT,CB_SETCURSEL,0,0);books::setView(window,state,false);
     SendDlgItemMessageW(window,IDC_REFRESH,BM_CLICK,0,0);
 }
+static void testBrowserMenu(HWND window,books::Browser& state) {
+    const auto folder=state.folder,current=state.current;const auto files=state.allFiles;const bool recursive=state.includeSubfolders;
+    RECT menuButton{},heading{};GetWindowRect(GetDlgItem(window,IDC_BROWSER_MENU),&menuButton);GetWindowRect(GetDlgItem(window,IDC_HEADING),&heading);
+    if(menuButton.right>=heading.left||menuButton.top!=heading.top)fail(__LINE__);
+    SendDlgItemMessageW(window,IDC_BROWSER_MENU,BM_CLICK,0,0);
+    if(!state.menu||!IsWindowVisible(state.menu)||GetWindow(state.menu,GW_OWNER)!=window||GetFocus()!=GetDlgItem(state.menu,IDC_MENU_SETTINGS))fail(__LINE__);
+    wchar_t label[64]{};GetDlgItemTextW(state.menu,IDC_MENU_SETTINGS,label,64);if(std::wstring(label)!=L"Settings")fail(__LINE__);
+    GetDlgItemTextW(state.menu,IDC_MENU_ABOUT,label,64);if(std::wstring(label)!=L"About")fail(__LINE__);
+    GetDlgItemTextW(state.menu,IDC_MENU_CHECK_UPDATES,label,64);if(std::wstring(label)!=L"Check for updates")fail(__LINE__);
+    SendMessageW(GetDlgItem(state.menu,IDC_MENU_SETTINGS),WM_KEYDOWN,VK_DOWN,0);
+    if(GetFocus()!=GetDlgItem(state.menu,IDC_MENU_ABOUT))fail(__LINE__);
+    SendMessageW(GetDlgItem(state.menu,IDC_MENU_ABOUT),WM_KEYDOWN,VK_TAB,0);
+    if(GetFocus()!=GetDlgItem(state.menu,IDC_MENU_CHECK_UPDATES))fail(__LINE__);
+    SendMessageW(GetDlgItem(state.menu,IDC_MENU_CHECK_UPDATES),WM_KEYDOWN,VK_ESCAPE,0);
+    if(state.menu||GetFocus()!=GetDlgItem(window,IDC_BROWSER_MENU))fail(__LINE__);
+    SendDlgItemMessageW(window,IDC_BROWSER_MENU,BM_CLICK,0,0);auto popup=state.menu;
+    SendDlgItemMessageW(window,IDC_BROWSER_MENU,BM_CLICK,0,0);if(state.menu||!popup)fail(__LINE__);
+    SendDlgItemMessageW(window,IDC_BROWSER_MENU,BM_CLICK,0,0);SendMessageW(state.menu,WM_COMMAND,IDC_MENU_SETTINGS,0);
+    if(state.menu||settingsOpened!=1)fail(__LINE__);
+    SendDlgItemMessageW(window,IDC_BROWSER_MENU,BM_CLICK,0,0);SendMessageW(state.menu,WM_COMMAND,IDC_MENU_ABOUT,0);
+    if(state.menu||aboutOpened!=1||updateOpened)fail(__LINE__);
+    SendDlgItemMessageW(window,IDC_BROWSER_MENU,BM_CLICK,0,0);SendMessageW(state.menu,WM_COMMAND,IDC_MENU_CHECK_UPDATES,0);
+    if(state.menu||updateOpened!=1||state.folder!=folder||state.current!=current||state.allFiles!=files||state.includeSubfolders!=recursive)fail(__LINE__);
+}
+static bool pumpUntil(HWND window,const std::function<bool()>& ready,DWORD timeout=5000) {
+    const auto deadline=GetTickCount64()+timeout;
+    while(!ready()&&GetTickCount64()<deadline) {
+        MSG message{};
+        while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) {
+            if(!IsDialogMessageW(window,&message)){TranslateMessage(&message);DispatchMessageW(&message);}
+        }
+        Sleep(1);
+    }
+    return ready();
+}
+static void testSubfolders(HWND window,books::Browser& state) {
+    const auto first=state.folder/L"Shelf A",second=state.folder/L"Shelf B";
+    books::fs::create_directories(first);books::fs::create_directories(second/L"Images");
+    for(const auto& path:{first/L"Duplicate.epub",second/L"Duplicate.epub",second/L"Images"/L"Cover.png",second/L"Ignored.exe"}){std::ofstream file(path);file<<"fixture";}
+    if(SendDlgItemMessageW(window,IDC_INCLUDE_SUBFOLDERS,BM_GETCHECK,0,0)!=BST_UNCHECKED||state.includeSubfolders)fail(__LINE__);
+    SendDlgItemMessageW(window,IDC_INCLUDE_SUBFOLDERS,BM_CLICK,0,0);
+    wchar_t status[128]{};GetDlgItemTextW(window,IDC_SCAN_STATUS,status,128);
+    if(!state.includeSubfolders||!state.scanActive||state.allFiles.size()!=state.directFiles.size()||std::wstring(status).find(L"Scanning subfolders")!=0)fail(__LINE__);
+    const auto scanGeneration=state.scanGeneration;
+    SendDlgItemMessageW(window,IDC_BROWSER_MENU,BM_CLICK,0,0);if(!state.menu)fail(__LINE__);
+    SendMessageW(state.menu,WM_CLOSE,0,0);
+    if(state.menu||!state.includeSubfolders||state.scanGeneration!=scanGeneration)fail(__LINE__);
+    if(!pumpUntil(window,[&]{return !state.scanActive;}))fail(__LINE__);
+    if(state.allFiles.size()!=state.directFiles.size()+3||state.subfolderFilesFound!=3||(GetWindowLongPtrW(GetDlgItem(window,IDC_TYPE_FIRST+6),GWL_STYLE)&WS_VISIBLE)==0)fail(__LINE__);
+    GetDlgItemTextW(window,IDC_SCAN_STATUS,status,128);if(*status)fail(__LINE__);
+    SetDlgItemTextW(window,IDC_SEARCH,L"Shelf A\\Duplicate.epub");
+    if(state.files.size()!=1||books::displayedPath(state,state.files.front())!=L"Shelf A\\Duplicate.epub")fail(__LINE__);
+    const auto longPath=state.folder/L"More books"/L"Several nested folders"/L"some-book.epub";
+    const auto compact=books::compactTilePath(state,longPath,34);
+    if(compact!=L"More books\\...\\some-book.epub")fail(__LINE__);
+    SetDlgItemTextW(window,IDC_SEARCH,L"");SendDlgItemMessageW(window,IDC_VIEW_THUMBS,BM_CLICK,0,0);
+    if(ListView_GetItemCount(GetDlgItem(window,IDC_FILE_GRID))!=static_cast<int>(state.directFiles.size()+3))fail(__LINE__);
+    SendDlgItemMessageW(window,IDC_VIEW_LIST,BM_CLICK,0,0);
+    SendDlgItemMessageW(window,IDC_INCLUDE_SUBFOLDERS,BM_CLICK,0,0);
+    if(state.includeSubfolders||state.scanActive||state.allFiles!=state.directFiles||state.files.size()!=state.directFiles.size())fail(__LINE__);
+    SendDlgItemMessageW(window,IDC_INCLUDE_SUBFOLDERS,BM_CLICK,0,0);
+    SendDlgItemMessageW(window,IDC_INCLUDE_SUBFOLDERS,BM_CLICK,0,0);
+    const auto settle=GetTickCount64()+50;pumpUntil(window,[&]{return GetTickCount64()>=settle;},100);
+    if(state.includeSubfolders||state.allFiles!=state.directFiles)fail(__LINE__);
+    books::fs::remove_all(first);books::fs::remove_all(second);
+}
 static INT_PTR CALLBACK testProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
     if(message==WM_APP+90) {
         auto state=reinterpret_cast<books::Browser*>(GetWindowLongPtrW(window,DWLP_USER));
         if(state->files.size()!=3) fail(__LINE__);
         if(mode==0) {
+            testBrowserMenu(window,*state);
             auto switched=state->initialFolder/(L"Folder with spaces \u65e5\u672c\u8a9e");
             auto empty=state->initialFolder/L"Empty folder";
             books::fs::create_directories(switched);books::fs::create_directories(empty);
@@ -171,6 +244,8 @@ static INT_PTR CALLBACK testProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             }
             SendDlgItemMessageW(window,IDC_FILE_LIST,LB_SETSEL,FALSE,-1);books::selectFile(window,*state);
             books::styleBrowser(window);
+            if((GetWindowLongPtrW(GetDlgItem(window,IDC_FILE_LIST),GWL_STYLE)&WS_BORDER)||
+               (GetWindowLongPtrW(GetDlgItem(window,IDC_FILE_LIST),GWL_EXSTYLE)&(WS_EX_CLIENTEDGE|WS_EX_STATICEDGE)))fail(__LINE__);
             RECT sortBounds{},viewBounds{};GetWindowRect(GetDlgItem(window,IDC_SORT),&sortBounds);GetWindowRect(GetDlgItem(window,IDC_VIEW_LIST),&viewBounds);
             if(sortBounds.top!=viewBounds.top || sortBounds.bottom!=viewBounds.bottom) fail(__LINE__);
             if(SendDlgItemMessageW(window,IDC_SORT,CB_GETITEMHEIGHT,0,0)!=viewBounds.bottom-viewBounds.top) fail(__LINE__);
@@ -180,7 +255,7 @@ static INT_PTR CALLBACK testProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             if(GetDlgItem(window,IDC_UPDATE_CHECK)) fail(__LINE__);
             if(books::usesDarkTheme(window)) {
                 auto dc=GetDC(window);
-                for(auto id:{IDC_HEADING,-1,IDC_FOLDER_PATH,IDC_FILE_COUNT,IDC_BROWSER_HELP}) {
+                for(auto id:{IDC_HEADING,-1,IDC_FOLDER_PATH,IDC_FILE_COUNT,IDC_SCAN_STATUS,IDC_BROWSER_HELP}) {
                     auto brush=reinterpret_cast<HBRUSH>(SendMessageW(window,WM_CTLCOLORSTATIC,reinterpret_cast<WPARAM>(dc),reinterpret_cast<LPARAM>(GetDlgItem(window,id))));
                     if(brush!=books::dialogBackground(window)) fail(__LINE__);
                 }
@@ -245,7 +320,7 @@ static INT_PTR CALLBACK testProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             auto text=books::bookInformationText(state->files[0],details);
             if(!(text.find(L"\nTitle:")<text.find(L"\nAuthor:") && text.find(L"\nAuthor:")<text.find(L"\nPublisher:") && text.find(L"\nPublisher:")<text.find(L"\nFormat:") && text.find(L"\nFormat:")<text.find(L"\nSize:"))) fail(__LINE__);
         }
-        if(mode==0)testRefresh(window,*state);
+        if(mode==0){testRefresh(window,*state);testSubfolders(window,*state);}
         SendDlgItemMessageW(window,IDC_FILE_LIST,LB_SETSEL,FALSE,-1);
         SendDlgItemMessageW(window,IDC_FILE_LIST,LB_SETSEL,TRUE,0);
         if(mode==1) SendDlgItemMessageW(window,IDC_FILE_LIST,LB_SETSEL,TRUE,2);
@@ -282,7 +357,7 @@ int wmain(int argc,wchar_t** argv) {
     auto previousDpi=SetThreadDpiAwarenessContext(dpiContext);
     for(mode=0;mode<3;++mode) {
         books::rememberedByBrowserTest.clear();
-        books::Browser state; state.initialFolder=root; state.rememberInitialFolder=mode==0;
+        books::Browser state; state.initialFolder=root; state.rememberInitialFolder=mode==0;state.menuActions={testMenuSettings,testMenuAbout};
         auto result=DialogBoxParamW(GetModuleHandleW(nullptr),MAKEINTRESOURCEW(IDD_BROWSER),nullptr,testProc,reinterpret_cast<LPARAM>(&state));
         if(mode==0 && books::rememberedByBrowserTest!=root)fail(__LINE__);
         if(mode==2) { if(result!=IDCANCEL || !state.selected.empty()) fail(__LINE__); }

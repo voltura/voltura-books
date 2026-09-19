@@ -4,6 +4,7 @@
 #include <dwmapi.h>
 #include <uxtheme.h>
 #include <string>
+#include <cmath>
 
 namespace books {
 namespace {
@@ -166,7 +167,12 @@ LRESULT CALLBACK comboProc(HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PTR
         SetBkMode(dc,TRANSPARENT); SetTextColor(dc,IsWindowEnabled(window)?t->foreground:GetSysColor(COLOR_GRAYTEXT));
         RECT text=r; const int pad=MulDiv(6,GetDpiForWindow(window),96); text.left+=pad; text.right-=pad*4;
         auto value=label(window); DrawTextW(dc,value.c_str(),-1,&text,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
-        RECT arrow=r; arrow.left=arrow.right-pad*4; DrawTextW(dc,L"\x2304",1,&arrow,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+        RECT arrow=r; arrow.left=arrow.right-pad*4;
+        const int arrowSize=MulDiv(18,GetDpiForWindow(window),96);
+        auto arrowFont=CreateFontW(-arrowSize,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe Fluent Icons");
+        auto valueFont=SelectObject(dc,arrowFont);
+        DrawTextW(dc,L"\xE70D",1,&arrow,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);
+        SelectObject(dc,valueFont); DeleteObject(arrowFont);
         SelectObject(dc,font); EndPaint(window,&paint); return 0;
     }
     auto result=DefSubclassProc(window,message,wp,lp);
@@ -190,8 +196,13 @@ const wchar_t* actionButtonGlyph(HWND button) {
         case IDC_BROWSE_FOLDER: case IDC_FOLDER: case IDC_OPEN_FOLDER: return L"\xE8B7";
         case IDC_OPEN_FILE: return L"\xE8A7";
         case IDC_COPY_PATH: return L"\xE8C8";
+        case IDC_BROWSER_MENU: return L"\xE700";
+        case IDC_MENU_SETTINGS: return L"\xE713";
+        case IDC_MENU_ABOUT: return L"\xE946";
+        case IDC_MENU_CHECK_UPDATES: return L"\xE72C";
         case IDC_REFRESH: return L"\xE72C";
         case IDC_FULLSCREEN_READER: return L"\xE740";
+        case IDC_DOWNLOAD_VIEW: return L"\xE896";
         case IDC_UPDATE_OPEN: return L"\xE896";
         case IDC_ABOUT_WEBSITE: return L"\xE774";
         case IDC_ABOUT_ISSUES: return L"\xEBE8";
@@ -221,6 +232,20 @@ void paintButton(NMCUSTOMDRAW* draw, const Theme& t) {
                 DrawTextW(draw->hdc,icon,1,&r,DT_SINGLELINE|DT_CENTER|DT_VCENTER);
                 if(draw->uItemState&CDIS_FOCUS)drawKeyboardFocus(button,draw->hdc,r);
                 RestoreDC(draw->hdc,saved); DeleteObject(glyph); return;
+            }
+            if(GetDlgItem(GetParent(button),IDC_MENU_SETTINGS)) {
+                fill(draw->hdc,r,t.panel);
+                if(hot||pressed)rounded(draw->hdc,r,color(t.input),color(t.input),MulDiv(7,GetDpiForWindow(button),96));
+                SetBkMode(draw->hdc,TRANSPARENT);SetTextColor(draw->hdc,disabled?GetSysColor(COLOR_GRAYTEXT):t.foreground);
+                const int pad=MulDiv(12,GetDpiForWindow(button),96),iconSize=MulDiv(18,GetDpiForWindow(button),96);
+                RECT icon{pad,0,pad+iconSize,r.bottom};
+                auto glyphFont=CreateFontW(-iconSize,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe Fluent Icons");
+                auto old=SelectObject(draw->hdc,glyphFont);DrawTextW(draw->hdc,actionButtonGlyph(button),1,&icon,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+                SelectObject(draw->hdc,old);DeleteObject(glyphFont);
+                text.left=icon.right+MulDiv(10,GetDpiForWindow(button),96);text.right-=pad;
+                auto value=label(button);DrawTextW(draw->hdc,value.c_str(),-1,&text,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);
+                if(draw->uItemState&CDIS_FOCUS)drawKeyboardFocus(button,draw->hdc,r);
+                RestoreDC(draw->hdc,saved);return;
             }
             if(controlId==IDC_ADVANCED && GetDlgItem(GetParent(button),IDC_METHOD_DIRECT)) {
                 fill(draw->hdc,r,color(t.panel)); SetBkMode(draw->hdc,TRANSPARENT); SetTextColor(draw->hdc,t.foreground);
@@ -270,18 +295,18 @@ void paintButton(NMCUSTOMDRAW* draw, const Theme& t) {
             }
             const bool primary=(GetDlgItem(GetParent(button),IDC_DROP_ZONE) ? GetDlgCtrlID(button)==IDC_CHOOSE_BOOK : type==BS_DEFPUSHBUTTON) && !disabled;
             const auto id=GetDlgCtrlID(button);
-            fill(draw->hdc,r,GetDlgItem(GetParent(button),IDC_SEARCH) && (id==IDC_OPEN_FILE || id==IDC_OPEN_FOLDER || id==IDC_COPY_PATH || id==IDC_FULLSCREEN_READER) ? t.panel : t.surface);
+            fill(draw->hdc,r,GetDlgItem(GetParent(button),IDC_SEARCH) && (id==IDC_OPEN_FILE || id==IDC_OPEN_FOLDER || id==IDC_COPY_PATH || id==IDC_FULLSCREEN_READER || id==IDC_DOWNLOAD_VIEW) ? t.panel : t.surface);
             if(auto glyph=actionButtonGlyph(button)) {
                 const auto background=primary ? GetSysColor(COLOR_HIGHLIGHT) : t.dark ? RGB(48,48,48) : GetSysColor(COLOR_BTNFACE);
                 rounded(draw->hdc,r,color(background),color(primary ? background : t.dark ? RGB(78,78,78) : GetSysColor(COLOR_3DSHADOW)),MulDiv(7,GetDpiForWindow(button),96));
                 SetTextColor(draw->hdc,disabled ? GetSysColor(COLOR_GRAYTEXT) : primary ? GetSysColor(COLOR_HIGHLIGHTTEXT) : t.foreground); SetBkMode(draw->hdc,TRANSPARENT);
-                auto value=id==IDC_REFRESH ? std::wstring{} : label(button); SIZE size{}; GetTextExtentPoint32W(draw->hdc,value.c_str(),static_cast<int>(value.size()),&size);
+                auto value=id==IDC_REFRESH||id==IDC_BROWSER_MENU ? std::wstring{} : label(button); SIZE size{}; GetTextExtentPoint32W(draw->hdc,value.c_str(),static_cast<int>(value.size()),&size);
                 const int iconSize=MulDiv(18,GetDpiForWindow(button),96),gap=MulDiv(8,GetDpiForWindow(button),96);
                 // Centre one shared content column for the browser details actions,
                 // rather than centring each differently sized label independently.
                 LONG columnWidth=size.cx;
-                if(GetDlgItem(GetParent(button),IDC_SEARCH) && (id==IDC_OPEN_FILE || id==IDC_OPEN_FOLDER || id==IDC_COPY_PATH || id==IDC_FULLSCREEN_READER)) {
-                    for(auto action:{IDC_FULLSCREEN_READER,IDC_OPEN_FILE,IDC_OPEN_FOLDER,IDC_COPY_PATH}) {
+                if(GetDlgItem(GetParent(button),IDC_SEARCH) && (id==IDC_OPEN_FILE || id==IDC_OPEN_FOLDER || id==IDC_COPY_PATH || id==IDC_FULLSCREEN_READER || id==IDC_DOWNLOAD_VIEW)) {
+                    for(auto action:{IDC_FULLSCREEN_READER,IDC_DOWNLOAD_VIEW,IDC_OPEN_FILE,IDC_OPEN_FOLDER,IDC_COPY_PATH}) {
                         auto sibling=GetDlgItem(GetParent(button),action);
                         if(!sibling)continue;
                         auto siblingLabel=label(sibling);SIZE measured{};
@@ -296,9 +321,30 @@ void paintButton(NMCUSTOMDRAW* draw, const Theme& t) {
                 DrawTextW(draw->hdc,value.c_str(),-1,&text,DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);
                 auto iconFont=CreateFontW(-iconSize,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe Fluent Icons");
                 auto old=SelectObject(draw->hdc,iconFont); RECT icon{text.left-iconSize-gap,0,text.left-gap,r.bottom};
-                if(id==IDC_REFRESH)icon=r;
+                if(id==IDC_REFRESH||id==IDC_BROWSER_MENU)icon=r;
                 if(id==IDC_FULLSCREEN_READER)drawFullscreenIcon(draw->hdc,icon,GetDpiForWindow(button),GetTextColor(draw->hdc));
-                else DrawTextW(draw->hdc,glyph,1,&icon,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+                else if(id==IDC_DOWNLOAD_VIEW&&disabled) {
+                    const auto frame=GetTickCount64()/80;
+                    const int radius=MulDiv(6,GetDpiForWindow(button),96);
+                    const int cx=(icon.left+icon.right)/2,cy=(icon.top+icon.bottom)/2;
+                    const auto foreground=GetTextColor(draw->hdc);
+                    auto blend=[](COLORREF front,COLORREF back,int amount) {
+                        return RGB((GetRValue(front)*amount+GetRValue(back)*(100-amount))/100,
+                                   (GetGValue(front)*amount+GetGValue(back)*(100-amount))/100,
+                                   (GetBValue(front)*amount+GetBValue(back)*(100-amount))/100);
+                    };
+                    auto previousPen=SelectObject(draw->hdc,GetStockObject(NULL_PEN));
+                    constexpr int strengths[]{100,78,58,42,30,24,20,18};
+                    for(int n=0;n<8;++n) {
+                        const double angle=(n+static_cast<int>(frame%8))*3.141592653589793/4;
+                        const int x=cx+static_cast<int>(std::cos(angle)*radius),y=cy+static_cast<int>(std::sin(angle)*radius);
+                        const int dot=(std::max)(1,MulDiv(n<2?2:1,GetDpiForWindow(button),96));
+                        auto brush=CreateSolidBrush(blend(foreground,background,strengths[n]));auto previousBrush=SelectObject(draw->hdc,brush);
+                        Ellipse(draw->hdc,x-dot,y-dot,x+dot+1,y+dot+1);
+                        SelectObject(draw->hdc,previousBrush);DeleteObject(brush);
+                    }
+                    SelectObject(draw->hdc,previousPen);
+                } else DrawTextW(draw->hdc,glyph,1,&icon,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
                 SelectObject(draw->hdc,old); DeleteObject(iconFont);
                 if(draw->uItemState&CDIS_FOCUS)drawKeyboardFocus(button,draw->hdc,r,primary);
                 RestoreDC(draw->hdc,saved); return;
@@ -389,7 +435,12 @@ void refresh(HWND window,Theme& t) {
             SetWindowSubclass(child,comboProc,1,0);
             HDC dc=GetDC(child); auto old=SelectObject(dc,reinterpret_cast<HFONT>(SendMessageW(child,WM_GETFONT,0,0)));
             TEXTMETRICW metrics{}; GetTextMetricsW(dc,&metrics); SelectObject(dc,old); ReleaseDC(child,dc);
-            const auto height=metrics.tmHeight+MulDiv(GetDlgCtrlID(child)==IDC_SORT ? 4 : 10,GetDpiForWindow(child),96);
+            auto height=metrics.tmHeight+MulDiv(GetDlgCtrlID(child)==IDC_SORT ? 4 : 10,GetDpiForWindow(child),96);
+            if(GetDlgCtrlID(child)==IDC_SECURITY) {
+                RECT inputBounds{};
+                GetWindowRect(GetDlgItem(window,IDC_HOST),&inputBounds);
+                height=inputBounds.bottom-inputBounds.top;
+            }
             SendMessageW(child,CB_SETITEMHEIGHT,static_cast<WPARAM>(-1),height);
             SendMessageW(child,CB_SETITEMHEIGHT,0,height);
         }

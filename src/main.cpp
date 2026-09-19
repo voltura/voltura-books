@@ -243,9 +243,27 @@ static void advancedLayout(HWND window, bool expanded) {
     auto previousScroll=GetScrollPos(GetDlgItem(window,IDC_SETTINGS_SCROLL),SB_CTL);
     if(previousScroll) ScrollWindowEx(window,0,previousScroll,nullptr,nullptr,nullptr,nullptr,SW_SCROLLCHILDREN|SW_INVALIDATE);
     SetScrollPos(GetDlgItem(window,IDC_SETTINGS_SCROLL),SB_CTL,0,FALSE);
+    auto singleLineHeight=[&](int id) {
+        auto control=GetDlgItem(window,id);auto dc=GetDC(control);auto old=SelectObject(dc,reinterpret_cast<HFONT>(SendMessageW(control,WM_GETFONT,0,0)));
+        RECT measured{0,0,10000,0};auto value=text(window,id);DrawTextW(dc,value.c_str(),-1,&measured,DT_CALCRECT|DT_SINGLELINE|DT_NOPREFIX);
+        SelectObject(dc,old);ReleaseDC(control,dc);return measured.bottom;
+    };
+    RECT heading{},subtitle{};GetWindowRect(GetDlgItem(window,IDC_HEADING),&heading);GetWindowRect(GetDlgItem(window,IDC_SETUP_SUBTITLE),&subtitle);
+    MapWindowPoints(nullptr,window,reinterpret_cast<POINT*>(&heading),2);MapWindowPoints(nullptr,window,reinterpret_cast<POINT*>(&subtitle),2);
+    const int headingHeight=singleLineHeight(IDC_HEADING),subtitleHeight=singleLineHeight(IDC_SETUP_SUBTITLE);
+    const int subtitleTop=heading.top+headingHeight-subtitleHeight-MulDiv(5, GetDpiForWindow(window), 96);
+    SetWindowPos(GetDlgItem(window,IDC_SETUP_SUBTITLE),nullptr,subtitle.left,subtitleTop,subtitle.right-subtitle.left,subtitle.bottom-subtitle.top,SWP_NOZORDER);
+    const int panelPadding=MulDiv(12,GetDpiForWindow(window),96);
+    RECT panelSpacing{0,0,0,22},dialogScale{0,0,0,1000};MapDialogRect(window,&panelSpacing);MapDialogRect(window,&dialogScale);
+    const int interPanelGap=(std::max)(0L,panelSpacing.bottom-2*panelPadding);
+    const int deliveryTop=heading.top+headingHeight+interPanelGap+panelPadding;
+    const LONG contentTop=(deliveryTop*1000+dialogScale.bottom/2)/dialogScale.bottom;
     const LONG methodHeight=textHeight(IDC_METHOD_HELP,388);
-    place(IDC_METHOD_HELP,26,111,388,methodHeight);
-    const LONG destination=111+methodHeight+22;
+    place(IDC_DELIVERY_HEADING,26,contentTop,388,12);
+    place(IDC_METHOD_DIRECT,26,contentTop+16,190,30);place(IDC_METHOD_PROVIDER,224,contentTop+16,190,30);
+    const LONG methodHelpTop=contentTop+52;
+    place(IDC_METHOD_HELP,26,methodHelpTop,388,methodHeight);
+    const LONG destination=methodHelpTop+methodHeight+22;
     place(IDC_DESTINATION_HEADING,26,destination,388,12);
     place(IDC_KINDLE,26,destination+16,388,20);
     const LONG account=destination+58;
@@ -271,7 +289,7 @@ static void advancedLayout(HWND window, bool expanded) {
         ShowWindow(GetDlgItem(window,id),expanded ? SW_SHOW : SW_HIDE);
     const LONG buttons=direct ? footer+approvalHeight+22 : advanced+(expanded ? 86+hostErrorHeight : 28);
     place(IDOK,276,buttons,70,22); place(IDCANCEL,354,buttons,72,22);
-    RECT units{0,0,440,buttons+36}; MapDialogRect(window,&units);
+    RECT units{0,0,440,buttons+32}; MapDialogRect(window,&units);
     RECT outer{},client{}; GetWindowRect(window,&outer); GetClientRect(window,&client);
     const int frameHeight=(outer.bottom-outer.top)-client.bottom;
     MONITORINFO monitor{sizeof(monitor)}; GetMonitorInfoW(MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST),&monitor);
@@ -524,6 +542,11 @@ bool showSettings(HWND owner, Settings& settings) {
     if (result == -1) throw std::runtime_error("Could not open settings.");
     return result == IDOK;
 }
+bool showBrowserSettings(HWND owner) {
+    auto settings=loadSettings();
+    return showSettings(owner,settings);
+}
+BrowserMenuActions browserMenuActions() { return {showBrowserSettings,showAbout}; }
 constexpr UINT SendComplete = WM_APP + 1;
 constexpr UINT_PTR PreviewTimer = 2;
 struct SendPreview {
@@ -702,7 +725,7 @@ static INT_PTR CALLBACK dropProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             auto folder=pendingBrowseFolder;pendingBrowseFolder.clear();
             if(folder.empty())SendMessageW(window,WM_COMMAND,IDC_BROWSE_FOLDER,0);
             else {
-                auto selection=browseBooks(window,folder,previewOnly,true);
+                auto selection=browseBooks(window,folder,previewOnly,true,browserMenuActions());
                 if(!selection.empty()){*path=std::move(selection);EndDialog(window,IDOK);}
                 else EndDialog(window,IDCANCEL);
             }
@@ -725,7 +748,7 @@ static INT_PTR CALLBACK dropProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             return TRUE;
         }
         if(message==WM_COMMAND && LOWORD(wp)==IDC_BROWSE_FOLDER) {
-            auto selection=browseBooks(window,{},previewOnly);
+            auto selection=browseBooks(window,{},previewOnly,false,browserMenuActions());
             if(!selection.empty()) { *path=std::move(selection); EndDialog(window,IDOK); }
             else EndDialog(window,IDCANCEL);
             return TRUE;
@@ -848,7 +871,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             auto s=loadSettings(); showSettings(nullptr,s);
         } else if((argc==2 && argv[1]==L"--browse") || (argc==3 && argv[1]==L"--browse")) {
             previewOnly=argc==3 && argv[2]==L"--test-sending";
-            result=sendSelectedBooks(browseBooks(nullptr,launchFolder,previewOnly,!launchFolder.empty()));
+            result=sendSelectedBooks(browseBooks(nullptr,launchFolder,previewOnly,!launchFolder.empty(),browserMenuActions()));
         } else if(argc==1 || (argc==2 && (argv[1]==L"--drop" || argv[1]==L"--test-sending"))) {
             previewOnly=argc==2 && argv[1]==L"--test-sending";
             std::vector<fs::path> path;

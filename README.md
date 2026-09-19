@@ -167,4 +167,4 @@ or endorsed by Amazon.
 
 ## About and updates
 
-Open **About** from the Send a book window for version, license, website and support links. **Check for updates** downloads a newer stable release and verifies it before offering **Install update**. You choose when to install. Checks contact GitHub only when requested.
+Open the menu in **Browse books** for **Settings**, **About**, and **Check for updates**. About is also available from the Send a book window and includes the version, license, website and support links. Choosing **Check for updates** starts the check immediately, downloads a newer stable release when available, and verifies it before offering **Install update**. You choose when to install. Checks contact GitHub only when requested.
