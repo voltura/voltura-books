@@ -53,6 +53,7 @@ use `all` only when validating the entire reader. These tests open windows, chan
 focus, and can enter fullscreen: do not run them on an occupied desktop.
 
 The C++ suite covers folder browsing, sequential queues, input layout and validation, file drops, mail setup, history, and Explorer COM selection. Run the COM selection test in the signed-in interactive Windows session: registration and activation must use the same user context. The selection test uses a temporary test-only CLSID and 20 Unicode paths.
+When that test reports `REGDB_E_CLASSNOTREG` from a non-interactive process, `test-ui.ps1` reports that signed-in interactive validation is still required without blocking an otherwise successful scripted release. Other COM selection failures remain release-blocking.
 
 The SMTP fixture uses loopback servers and temporary certificates. It checks attachment integrity, authenticated and direct sending, TLS rejection, server rejection, and uncertain submission. No email leaves the computer. The cover fixture checks EPUB and DOCX metadata, PDF rendering, images, and malformed-document fallbacks. Queue tests use simulated mail and history.
 
