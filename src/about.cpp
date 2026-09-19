@@ -11,7 +11,7 @@
 namespace books {
 namespace {
 struct Check { UpdateResult result; std::atomic<bool> done{false}; };
-struct About { std::shared_ptr<Check> check; bool checkOnOpen=false; };
+struct About { std::shared_ptr<Check> check; bool checkOnOpen=false; AboutSettingsAction settingsAction=nullptr; };
 void open(HWND window,const wchar_t* url) {
     if(reinterpret_cast<INT_PTR>(ShellExecuteW(window,L"open",url,nullptr,nullptr,SW_SHOWNORMAL))<=32)
         themedMessageBox(window,L"Could not open the link. Please try again.",L"Voltura Books",MB_OK|MB_ICONERROR);
@@ -46,6 +46,7 @@ INT_PTR CALLBACK aboutProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
         SetDlgItemTextW(window,IDC_HEADING,L"Voltura Books " BOOKS_VERSION);
         SendMessageW(window,WM_SETICON,ICON_SMALL,reinterpret_cast<LPARAM>(LoadIconW(GetModuleHandleW(nullptr),MAKEINTRESOURCEW(IDI_BOOK))));
         state=reinterpret_cast<About*>(lp);
+        EnableWindow(GetDlgItem(window,IDC_ABOUT_SETTINGS),state->settingsAction!=nullptr);
         EnableWindow(GetDlgItem(window,IDC_UPDATE_OPEN),FALSE);
         if(state->checkOnOpen) startCheck(window,*state);
         else if(state->check) {
@@ -75,6 +76,12 @@ INT_PTR CALLBACK aboutProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
         case IDC_ABOUT_LICENSE: open(window,L"https://github.com/voltura/voltura-books/blob/main/LICENSE"); return TRUE;
         case IDC_ABOUT_SUPPORT: open(window,L"https://www.paypal.com/donate?hosted_button_id=7PN65YXN64DBG"); return TRUE;
         case IDC_ABOUT_COFFEE: open(window,L"https://ko-fi.com/G2G74W5F8"); return TRUE;
+        case IDC_ABOUT_SETTINGS: {
+            ShowWindow(window,SW_HIDE);
+            if(state->settingsAction) state->settingsAction(window);
+            EndDialog(window,IDCANCEL);
+            return TRUE;
+        }
         case IDCANCEL: EndDialog(window,IDCANCEL); return TRUE;
         }
     }
@@ -98,9 +105,10 @@ INT_PTR CALLBACK aboutProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
     return FALSE;
 }
 }
-bool showAbout(HWND owner,bool checkForUpdates) {
+bool showAbout(HWND owner,bool checkForUpdates,AboutSettingsAction settingsAction) {
     static About state;
     state.checkOnOpen=checkForUpdates;
+    state.settingsAction=settingsAction;
     return DialogBoxParamW(GetModuleHandleW(nullptr),MAKEINTRESOURCEW(IDD_ABOUT),owner,aboutProc,reinterpret_cast<LPARAM>(&state))==IDOK;
 }
 }

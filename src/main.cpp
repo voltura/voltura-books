@@ -171,6 +171,14 @@ struct SettingsDialog {
     std::wstring layoutKey;
     ~SettingsDialog() { wipe(initialPassword); if(job) job->cancelled=true; }
 };
+bool showBrowserSettings(HWND owner);
+bool revealSettingsOwner(HWND about) {
+    auto settings=GetWindow(about,GW_OWNER);
+    if(!settings || !IsWindow(settings)) return false;
+    ShowWindow(settings,SW_SHOW);
+    SetForegroundWindow(settings);
+    return true;
+}
 static void advancedLayout(HWND window, bool expanded);
 static void updatePasswordHelp(HWND window, SettingsDialog& state) {
     if(SendDlgItemMessageW(window,IDC_METHOD,CB_GETCURSEL,0,0)==1) return;
@@ -288,6 +296,7 @@ static void advancedLayout(HWND window, bool expanded) {
     for(auto id : {IDC_HOST,IDC_PORT,IDC_SECURITY,IDC_HOST_LABEL,IDC_PORT_LABEL,IDC_SECURITY_LABEL})
         ShowWindow(GetDlgItem(window,id),expanded ? SW_SHOW : SW_HIDE);
     const LONG buttons=direct ? footer+approvalHeight+22 : advanced+(expanded ? 86+hostErrorHeight : 28);
+    place(IDC_SETTINGS_ABOUT,14,buttons,90,22);
     place(IDOK,276,buttons,70,22); place(IDCANCEL,354,buttons,72,22);
     RECT units{0,0,440,buttons+32}; MapDialogRect(window,&units);
     RECT outer{},client{}; GetWindowRect(window,&outer); GetClientRect(window,&client);
@@ -511,6 +520,10 @@ static INT_PTR CALLBACK settingsProc(HWND window, UINT message, WPARAM wparam, L
             } else startLookup(window,*state);
             return TRUE;
         }
+        if(message==WM_COMMAND && LOWORD(wparam)==IDC_SETTINGS_ABOUT) {
+            showAbout(window,false,revealSettingsOwner);
+            return TRUE;
+        }
         if (message == WM_COMMAND && LOWORD(wparam) == IDOK) {
             if(!validEmailAddress(text(window,IDC_KINDLE))) { error(window,L"Check your Kindle email address. Use an address such as name@kindle.com."); SetFocus(GetDlgItem(window,IDC_KINDLE)); return TRUE; }
             if(!validEmailAddress(text(window,IDC_SENDER))) { error(window,L"Check your sender email address. Use an address such as name@example.com."); SetFocus(GetDlgItem(window,IDC_SENDER)); return TRUE; }
@@ -546,7 +559,8 @@ bool showBrowserSettings(HWND owner) {
     auto settings=loadSettings();
     return showSettings(owner,settings);
 }
-BrowserMenuActions browserMenuActions() { return {showBrowserSettings,showAbout}; }
+bool showAboutWithSettings(HWND owner,bool checkForUpdates) { return showAbout(owner,checkForUpdates,showBrowserSettings); }
+BrowserMenuActions browserMenuActions() { return {showBrowserSettings,showAboutWithSettings}; }
 constexpr UINT SendComplete = WM_APP + 1;
 constexpr UINT_PTR PreviewTimer = 2;
 struct SendPreview {
@@ -774,7 +788,7 @@ static INT_PTR CALLBACK dropProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             else if(CommDlgExtendedError()) error(window,L"Could not open the file picker. You can drop a book into this window instead.");
             return TRUE;
         }
-        if(message==WM_COMMAND && LOWORD(wp)==IDC_ABOUT) { if(showAbout(window)) { pendingFiles.clear(); EndDialog(window,IDCANCEL); } return TRUE; }
+        if(message==WM_COMMAND && LOWORD(wp)==IDC_ABOUT) { if(showAbout(window,false,showBrowserSettings)) { pendingFiles.clear(); EndDialog(window,IDCANCEL); } return TRUE; }
         if(message==WM_COMMAND && LOWORD(wp)==IDC_SETTINGS) { auto settings=loadSettings(); showSettings(window,settings); return TRUE; }
         if(message==WM_CLOSE || (message==WM_COMMAND && LOWORD(wp)==IDCANCEL)) { EndDialog(window,IDCANCEL); return TRUE; }
     } catch(const std::exception& e) { error(window,wide(e.what())); }

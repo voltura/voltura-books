@@ -190,8 +190,9 @@ const wchar_t* actionButtonGlyph(HWND button) {
         case IDNO: case IDCANCEL: case IDABORT: return L"\xE711";
         case IDRETRY: case IDTRYAGAIN: case IDC_RETRY: case IDC_UPDATE_CHECK: return L"\xE72C";
         case IDIGNORE: case IDCONTINUE: case IDC_SKIP: return L"\xE893";
-        case IDC_SETTINGS: return L"\xE713";
+        case IDC_SETTINGS: case IDC_ABOUT_SETTINGS: return L"\xE713";
         case IDC_ABOUT: return L"\xE946";
+        case IDC_SETTINGS_ABOUT: return L"\xE946";
         case IDC_CHOOSE_BOOK: case IDC_ABOUT_LICENSE: return L"\xE8A5";
         case IDC_BROWSE_FOLDER: case IDC_FOLDER: case IDC_OPEN_FOLDER: return L"\xE8B7";
         case IDC_OPEN_FILE: return L"\xE8A7";
