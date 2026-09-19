@@ -72,6 +72,35 @@ struct Browser {
     std::shared_ptr<Worker> worker=std::make_shared<Worker>();
     ~Browser() { { std::lock_guard lock(thumbnails->mutex); thumbnails->stop=true; } thumbnails->wake.notify_one(); if(imageList) ImageList_Destroy(imageList); { std::lock_guard lock(worker->mutex); worker->stop=true; } worker->wake.notify_one(); for(auto [extension,icon]:icons) if(icon) DestroyIcon(icon); }
 };
+constexpr wchar_t HotItemProperty[]=L"VolturaBooks.HotItem";
+int hotItem(HWND list) {return static_cast<int>(reinterpret_cast<INT_PTR>(GetPropW(list,HotItemProperty)))-1;}
+void updateHotItem(HWND list,bool clear=false) {
+    const bool grid=GetDlgCtrlID(list)==IDC_FILE_GRID;
+    int next=-1;POINT point{};GetCursorPos(&point);
+    if(!clear&&IsWindowVisible(list)&&IsWindowEnabled(list)&&WindowFromPoint(point)==list) {
+        ScreenToClient(list,&point);
+        if(grid){LVHITTESTINFO hit{};hit.pt=point;next=ListView_HitTest(list,&hit);}
+        else {auto hit=SendMessageW(list,LB_ITEMFROMPOINT,0,MAKELPARAM(point.x,point.y));RECT bounds{};
+            if(!HIWORD(hit)&&SendMessageW(list,LB_GETITEMRECT,LOWORD(hit),reinterpret_cast<LPARAM>(&bounds))!=LB_ERR&&PtInRect(&bounds,point))next=LOWORD(hit);}
+    }
+    const int previous=hotItem(list);if(previous==next)return;
+    if(next<0)RemovePropW(list,HotItemProperty);else SetPropW(list,HotItemProperty,reinterpret_cast<HANDLE>(static_cast<INT_PTR>(next+1)));
+    for(int item:{previous,next})if(item>=0){RECT r{};
+        if(grid){if(ListView_GetItemRect(list,item,&r,LVIR_BOUNDS))InvalidateRect(list,&r,FALSE);}
+        else if(SendMessageW(list,LB_GETITEMRECT,item,reinterpret_cast<LPARAM>(&r))!=LB_ERR)InvalidateRect(list,&r,FALSE);
+    }
+}
+LRESULT CALLBACK hoverItemsProc(HWND list,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR) {
+    if(message==WM_MOUSEMOVE){TRACKMOUSEEVENT track{sizeof(track),TME_LEAVE,list,0};TrackMouseEvent(&track);updateHotItem(list);}
+    if(message==WM_MOUSELEAVE||message==WM_CANCELMODE||message==WM_NCDESTROY||
+       (message==WM_SHOWWINDOW&&!wp)||(message==WM_ENABLE&&!wp)||message==LB_RESETCONTENT||message==LVM_DELETEALLITEMS)updateHotItem(list,true);
+    auto result=DefSubclassProc(list,message,wp,lp);
+    if(message==WM_MOUSEWHEEL||message==WM_VSCROLL||message==WM_HSCROLL||message==WM_SIZE||message==WM_KEYDOWN||
+       message==LB_SETTOPINDEX||message==LVM_SCROLL||message==LVM_ENSUREVISIBLE||message==WM_SETREDRAW||
+       (message==WM_SHOWWINDOW&&wp)||(message==WM_ENABLE&&wp))updateHotItem(list);
+    if(message==WM_NCDESTROY)RemoveWindowSubclass(list,hoverItemsProc,1);
+    return result;
+}
 void toggleFullscreen(HWND window,Browser& state) {
     if(!state.reader || (!state.fullscreen&&!state.reader->canFullscreen()))return;
     auto cover=GetDlgItem(window,IDC_COVER);
@@ -363,7 +392,7 @@ void sizeRows(HWND window) {
 }
 void drawFile(HWND window,const DRAWITEMSTRUCT& draw,Browser& state) {
     const bool dark=usesDarkTheme(window),selected=(draw.itemState&ODS_SELECTED)!=0;
-    auto background=CreateSolidBrush(selected ? GetSysColor(COLOR_HIGHLIGHT) : dark ? RGB(32,32,32) : GetSysColor(COLOR_WINDOW));
+    auto background=CreateSolidBrush(interactionColor(draw.hwndItem,selected ? GetSysColor(COLOR_HIGHLIGHT) : dark ? RGB(32,32,32) : GetSysColor(COLOR_WINDOW),hotItem(draw.hwndItem)==static_cast<int>(draw.itemID)));
     FillRect(draw.hDC,&draw.rcItem,background); DeleteObject(background);
     if(draw.itemID>=state.files.size()) return;
     int saved=SaveDC(draw.hDC); const auto& path=state.files[draw.itemID];
@@ -403,6 +432,7 @@ INT_PTR CALLBACK proc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
         if(message==WM_MEASUREITEM && wp==IDC_FILE_LIST) { reinterpret_cast<MEASUREITEMSTRUCT*>(lp)->itemHeight=48; return TRUE; }
         if(message==WM_INITDIALOG) {
             state=reinterpret_cast<Browser*>(lp); SetWindowLongPtrW(window,DWLP_USER,lp); applyTheme(window);
+            for(auto id:{IDC_FILE_LIST,IDC_FILE_GRID})SetWindowSubclass(GetDlgItem(window,id),hoverItemsProc,1,0);
             state->tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,nullptr,WS_POPUP|TTS_ALWAYSTIP,0,0,0,0,window,nullptr,GetModuleHandleW(nullptr),nullptr);
             SetWindowTheme(state->tooltip,L"",L"");
             TOOLINFOW refreshTool{sizeof(refreshTool)}; refreshTool.uFlags=TTF_IDISHWND|TTF_SUBCLASS;
@@ -468,6 +498,20 @@ INT_PTR CALLBACK proc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
                     { std::lock_guard lock(state->thumbnails->mutex);
                       if(!state->thumbnails->images.contains(path) && state->thumbnails->pending.insert(path).second) state->thumbnails->requests.push_back(path); }
                     state->thumbnails->wake.notify_one();
+                    if(hotItem(header->hwndFrom)==static_cast<int>(draw->nmcd.dwItemSpec)) {
+                        draw->nmcd.uItemState|=CDIS_HOT;
+                        SetWindowLongPtrW(window,DWLP_MSGRESULT,CDRF_NOTIFYPOSTPAINT);return TRUE;
+                    }
+                }
+            }
+            if(header->code==NM_CUSTOMDRAW) {
+                auto draw=reinterpret_cast<NMLVCUSTOMDRAW*>(lp);
+                if(draw->nmcd.dwDrawStage==CDDS_ITEMPOSTPAINT&&hotItem(header->hwndFrom)==static_cast<int>(draw->nmcd.dwItemSpec)) {
+                    HIGHCONTRASTW contrast{sizeof(contrast)};SystemParametersInfoW(SPI_GETHIGHCONTRAST,sizeof(contrast),&contrast,0);
+                    if(!(contrast.dwFlags&HCF_HIGHCONTRASTON)) {
+                        RECT bounds{};ListView_GetItemRect(header->hwndFrom,static_cast<int>(draw->nmcd.dwItemSpec),&bounds,LVIR_BOUNDS);
+                        auto brush=CreateSolidBrush(usesDarkTheme(window)?RGB(105,105,105):RGB(150,150,150));FrameRect(draw->nmcd.hdc,&bounds,brush);DeleteObject(brush);
+                    }
                 }
             }
             if(header->code==LVN_ITEMCHANGED && !state->rebuilding) {
@@ -486,6 +530,13 @@ INT_PTR CALLBACK proc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
         if(message==WM_DRAWITEM && wp==IDC_CLEAR_SEARCH) {
             auto draw=reinterpret_cast<DRAWITEMSTRUCT*>(lp);const bool dark=usesDarkTheme(window);
             auto brush=CreateSolidBrush(dark?RGB(45,45,45):GetSysColor(COLOR_WINDOW));FillRect(draw->hDC,&draw->rcItem,brush);DeleteObject(brush);
+            const bool hot=controlHovered(draw->hwndItem),pressed=IsWindowEnabled(draw->hwndItem)&&(draw->itemState&ODS_SELECTED);
+            if(hot||pressed) {
+                const auto color=interactionColor(draw->hwndItem,dark?RGB(45,45,45):GetSysColor(COLOR_WINDOW),hot,pressed);
+                auto background=CreateSolidBrush(color);auto oldBrush=SelectObject(draw->hDC,background);auto oldPen=SelectObject(draw->hDC,GetStockObject(NULL_PEN));
+                const auto& r=draw->rcItem;const int radius=MulDiv(6,GetDpiForWindow(window),96);RoundRect(draw->hDC,r.left,r.top,r.right,r.bottom,radius,radius);
+                SelectObject(draw->hDC,oldBrush);SelectObject(draw->hDC,oldPen);DeleteObject(background);
+            }
             const int saved=SaveDC(draw->hDC);
             auto font=CreateFontW(-MulDiv(14,GetDpiForWindow(window),96),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe Fluent Icons");
             SelectObject(draw->hDC,font);SetBkMode(draw->hDC,TRANSPARENT);SetTextColor(draw->hDC,dark?RGB(240,240,240):GetSysColor(COLOR_WINDOWTEXT));

@@ -34,3 +34,19 @@
 .steps .step-number{width:40px;height:40px;border:0;border-radius:12px;background:var(--accent);color:var(--accent-ink);font-size:17px;font-weight:700}
 
 .button:has(.windows-icon){gap:10px}.windows-icon{display:block;flex:none;width:18px;height:18px}
+
+/* Standalone reading and viewing, introduced in 0.1.1. */
+.reader-section{padding-block:76px 0}
+.reader-intro{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;margin-bottom:32px}
+.reader-intro .lead{margin-bottom:0;font-size:18px;max-width:none}
+.reader-shot{margin:0;padding:18px;border:1px solid var(--line);border-radius:16px;background:var(--wash)}
+.reader-shot a{display:block}
+.reader-shot img{display:block;width:100%;border-radius:8px;box-shadow:var(--shadow)}
+.reader-shot figcaption{font-size:13px;padding:18px 8px 4px}
+.reader-shot figcaption a{display:inline}
+.reader-features{display:grid;grid-template-columns:repeat(3,1fr);gap:32px;margin-top:32px}
+.reader-features h3{font-size:21px;margin-bottom:12px}
+.reader-features p{font-size:15px;margin-bottom:0}
+.reader-features kbd{font:inherit;font-size:13px;border:1px solid var(--line);border-radius:4px;background:var(--card);padding:2px 5px;white-space:nowrap}
+.reader-note{font-size:13px;margin:24px 0 0;padding-bottom:32px;border-bottom:1px solid var(--line)}
+@media(max-width:700px){.reader-section{padding-top:48px}.reader-intro,.reader-features{grid-template-columns:1fr;gap:20px}.reader-intro{margin-bottom:24px}.reader-intro .section-heading h2{margin-bottom:0}.reader-shot{padding:8px}.reader-shot figcaption{font-size:12px}.reader-features{margin-top:24px}}

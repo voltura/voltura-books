@@ -38,6 +38,24 @@ LRESULT CALLBACK focusInput(int code,WPARAM wp,LPARAM lp) {
     }
     return CallNextHookEx(focusInputHook,code,wp,lp);
 }
+constexpr wchar_t HoverProperty[] = L"VolturaBooks.Hover";
+void trackHover(HWND window,UINT message,WPARAM wp,LPARAM lp) {
+    bool hot=GetPropW(window,HoverProperty)!=nullptr;
+    bool next=hot;
+    if(message==WM_MOUSEMOVE || message==WM_CAPTURECHANGED || (message==WM_ENABLE&&wp) || (message==WM_SHOWWINDOW&&wp)) {
+        POINT point{static_cast<short>(LOWORD(lp)),static_cast<short>(HIWORD(lp))};
+        if(message!=WM_MOUSEMOVE){GetCursorPos(&point);ScreenToClient(window,&point);}
+        RECT bounds{};GetClientRect(window,&bounds);
+        next=IsWindowEnabled(window)&&PtInRect(&bounds,point);
+        TRACKMOUSEEVENT track{sizeof(track),TME_LEAVE,window,0};TrackMouseEvent(&track);
+    }
+    if(message==WM_MOUSELEAVE || message==WM_CANCELMODE ||
+       message==WM_NCDESTROY || (message==WM_ENABLE&&!wp) || (message==WM_SHOWWINDOW&&!wp))next=false;
+    if(next!=hot) {
+        if(next)SetPropW(window,HoverProperty,reinterpret_cast<HANDLE>(1));else RemovePropW(window,HoverProperty);
+        InvalidateRect(window,nullptr,FALSE);
+    }
+}
 bool prefersDark() {
     HIGHCONTRASTW contrast{sizeof(contrast)};
     if(SystemParametersInfoW(SPI_GETHIGHCONTRAST,sizeof(contrast),&contrast,0) && (contrast.dwFlags&HCF_HIGHCONTRASTON)) return false;
@@ -137,20 +155,22 @@ LRESULT CALLBACK editProc(HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,
     return result;
 }
 LRESULT CALLBACK comboProc(HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR) {
+    trackHover(window,message,wp,lp);
     auto t=theme(GetParent(window));
-    if(message==WM_PAINT && t && t->dark) {
+    if(message==WM_PAINT && t && !highContrast()) {
         PAINTSTRUCT paint{}; HDC dc=BeginPaint(window,&paint);
         RECT r{}; GetClientRect(window,&r); fill(dc,r,t->surface);
-        rounded(dc,r,t->input,GetFocus()==window&&focusCuesVisible(window) ? RGB(96,205,255) : RGB(78,78,78),MulDiv(7,GetDpiForWindow(window),96));
+        const bool hot=controlHovered(window),open=SendMessageW(window,CB_GETDROPPEDSTATE,0,0)!=0;
+        rounded(dc,r,interactionColor(window,t->input,hot,open),GetFocus()==window&&focusCuesVisible(window) ? (t->dark?RGB(96,205,255):GetSysColor(COLOR_HIGHLIGHT)) : interactionColor(window,t->dark?RGB(78,78,78):GetSysColor(COLOR_3DSHADOW),hot,open),MulDiv(7,GetDpiForWindow(window),96));
         auto font=SelectObject(dc,reinterpret_cast<HFONT>(SendMessageW(window,WM_GETFONT,0,0)));
-        SetBkMode(dc,TRANSPARENT); SetTextColor(dc,t->foreground);
+        SetBkMode(dc,TRANSPARENT); SetTextColor(dc,IsWindowEnabled(window)?t->foreground:GetSysColor(COLOR_GRAYTEXT));
         RECT text=r; const int pad=MulDiv(6,GetDpiForWindow(window),96); text.left+=pad; text.right-=pad*4;
         auto value=label(window); DrawTextW(dc,value.c_str(),-1,&text,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
         RECT arrow=r; arrow.left=arrow.right-pad*4; DrawTextW(dc,L"\x2304",1,&arrow,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
         SelectObject(dc,font); EndPaint(window,&paint); return 0;
     }
     auto result=DefSubclassProc(window,message,wp,lp);
-    if(message==WM_SETFOCUS || message==WM_KILLFOCUS || message==CB_SETCURSEL || message==WM_UPDATEUISTATE) InvalidateRect(window,nullptr,FALSE);
+    if(message==WM_SETFOCUS || message==WM_KILLFOCUS || message==CB_SETCURSEL || message==CB_SHOWDROPDOWN || message==WM_LBUTTONDOWN || message==WM_LBUTTONUP || message==WM_KEYDOWN || message==WM_KEYUP || message==WM_ENABLE || message==WM_UPDATEUISTATE) InvalidateRect(window,nullptr,FALSE);
     return result;
 }
 const wchar_t* actionButtonGlyph(HWND button) {
@@ -184,14 +204,16 @@ void paintButton(NMCUSTOMDRAW* draw, const Theme& t) {
     int saved=SaveDC(draw->hdc);
     SelectObject(draw->hdc,reinterpret_cast<HFONT>(SendMessageW(draw->hdr.hwndFrom,WM_GETFONT,0,0)));
             HWND button=draw->hdr.hwndFrom;
-            bool disabled=!IsWindowEnabled(button), pressed=(draw->uItemState&CDIS_SELECTED)!=0;
+            bool disabled=!IsWindowEnabled(button), pressed=!disabled&&(draw->uItemState&CDIS_SELECTED)!=0;
+            const bool hot=controlHovered(button);
+            auto color=[&](COLORREF base){return interactionColor(button,base,hot,pressed);};
             const auto type=GetWindowLongPtrW(button,GWL_STYLE)&BS_TYPEMASK;
             const bool check=type==BS_AUTOCHECKBOX || type==BS_CHECKBOX;
             RECT r{}; GetClientRect(button,&r); RECT text=r;
             const auto controlId=GetDlgCtrlID(button);
             if(controlId==IDC_PASSWORD_SHOW || controlId==IDC_PASSWORD_COPY) {
                 fill(draw->hdc,r,t.panel);
-                rounded(draw->hdc,r,t.input,t.input,MulDiv(7,GetDpiForWindow(button),96));
+                rounded(draw->hdc,r,color(t.input),color(t.input),MulDiv(7,GetDpiForWindow(button),96));
                 const int size=MulDiv(18,GetDpiForWindow(button),96);
                 auto glyph=CreateFontW(-size,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe Fluent Icons");
                 SelectObject(draw->hdc,glyph); SetBkMode(draw->hdc,TRANSPARENT); SetTextColor(draw->hdc,t.foreground);
@@ -201,7 +223,7 @@ void paintButton(NMCUSTOMDRAW* draw, const Theme& t) {
                 RestoreDC(draw->hdc,saved); DeleteObject(glyph); return;
             }
             if(controlId==IDC_ADVANCED && GetDlgItem(GetParent(button),IDC_METHOD_DIRECT)) {
-                fill(draw->hdc,r,t.panel); SetBkMode(draw->hdc,TRANSPARENT); SetTextColor(draw->hdc,t.foreground);
+                fill(draw->hdc,r,color(t.panel)); SetBkMode(draw->hdc,TRANSPARENT); SetTextColor(draw->hdc,t.foreground);
                 text.left+=MulDiv(24,GetDpiForWindow(button),96);
                 auto value=label(button); DrawTextW(draw->hdc,value.c_str(),-1,&text,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
                 const int size=MulDiv(14,GetDpiForWindow(button),96);
@@ -214,7 +236,7 @@ void paintButton(NMCUSTOMDRAW* draw, const Theme& t) {
             if(controlId==IDC_METHOD_DIRECT || controlId==IDC_METHOD_PROVIDER) {
                 const bool selected=SendMessageW(button,BM_GETCHECK,0,0)==BST_CHECKED;
                 fill(draw->hdc,r,t.panel);
-                rounded(draw->hdc,r,selected ? GetSysColor(COLOR_HIGHLIGHT) : t.input,selected ? GetSysColor(COLOR_HIGHLIGHT) : t.dark ? RGB(78,78,78) : GetSysColor(COLOR_3DSHADOW),MulDiv(8,GetDpiForWindow(button),96));
+                rounded(draw->hdc,r,color(selected ? GetSysColor(COLOR_HIGHLIGHT) : t.input),color(selected ? GetSysColor(COLOR_HIGHLIGHT) : t.dark ? RGB(78,78,78) : GetSysColor(COLOR_3DSHADOW)),MulDiv(8,GetDpiForWindow(button),96));
                 SetBkMode(draw->hdc,TRANSPARENT); SetTextColor(draw->hdc,selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : t.foreground);
                 const int pad=MulDiv(12,GetDpiForWindow(button),96),iconSize=MulDiv(20,GetDpiForWindow(button),96);
                 auto font=reinterpret_cast<HFONT>(SendMessageW(button,WM_GETFONT,0,0)); LOGFONTW lf{}; GetObjectW(font,sizeof(lf),&lf); lf.lfWeight=FW_SEMIBOLD;
@@ -232,9 +254,8 @@ void paintButton(NMCUSTOMDRAW* draw, const Theme& t) {
             if(check && (GetWindowLongPtrW(button,GWL_STYLE)&BS_PUSHLIKE)) {
                 const bool selected=SendMessageW(button,BM_GETCHECK,0,0)==BST_CHECKED;
                 fill(draw->hdc,r,t.surface);
-                const auto background=pressed ? (t.dark ? RGB(65,65,65) : GetSysColor(COLOR_3DSHADOW))
-                    : selected ? GetSysColor(COLOR_HIGHLIGHT) : t.input;
-                rounded(draw->hdc,r,background,background,MulDiv(6,GetDpiForWindow(button),96));
+                const auto background=selected ? GetSysColor(COLOR_HIGHLIGHT) : t.input;
+                rounded(draw->hdc,r,color(background),color(background),MulDiv(6,GetDpiForWindow(button),96));
                 SetTextColor(draw->hdc,selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : t.foreground); SetBkMode(draw->hdc,TRANSPARENT);
                 auto value=label(button);
                 HFONT glyphFont=nullptr; auto id=GetDlgCtrlID(button);
@@ -251,9 +272,8 @@ void paintButton(NMCUSTOMDRAW* draw, const Theme& t) {
             const auto id=GetDlgCtrlID(button);
             fill(draw->hdc,r,GetDlgItem(GetParent(button),IDC_SEARCH) && (id==IDC_OPEN_FILE || id==IDC_OPEN_FOLDER || id==IDC_COPY_PATH || id==IDC_FULLSCREEN_READER) ? t.panel : t.surface);
             if(auto glyph=actionButtonGlyph(button)) {
-                const bool refreshHot=id==IDC_REFRESH && !disabled && (draw->uItemState&CDIS_HOT);
-                const auto background=primary ? GetSysColor(COLOR_HIGHLIGHT) : t.dark ? (pressed ? RGB(65,65,65) : refreshHot ? RGB(58,58,58) : RGB(48,48,48)) : id==IDC_REFRESH && pressed ? GetSysColor(COLOR_3DSHADOW) : refreshHot ? GetSysColor(COLOR_3DLIGHT) : GetSysColor(COLOR_BTNFACE);
-                rounded(draw->hdc,r,background,primary ? background : t.dark ? RGB(78,78,78) : GetSysColor(COLOR_3DSHADOW),MulDiv(7,GetDpiForWindow(button),96));
+                const auto background=primary ? GetSysColor(COLOR_HIGHLIGHT) : t.dark ? RGB(48,48,48) : GetSysColor(COLOR_BTNFACE);
+                rounded(draw->hdc,r,color(background),color(primary ? background : t.dark ? RGB(78,78,78) : GetSysColor(COLOR_3DSHADOW)),MulDiv(7,GetDpiForWindow(button),96));
                 SetTextColor(draw->hdc,disabled ? GetSysColor(COLOR_GRAYTEXT) : primary ? GetSysColor(COLOR_HIGHLIGHTTEXT) : t.foreground); SetBkMode(draw->hdc,TRANSPARENT);
                 auto value=id==IDC_REFRESH ? std::wstring{} : label(button); SIZE size{}; GetTextExtentPoint32W(draw->hdc,value.c_str(),static_cast<int>(value.size()),&size);
                 const int iconSize=MulDiv(18,GetDpiForWindow(button),96),gap=MulDiv(8,GetDpiForWindow(button),96);
@@ -284,16 +304,17 @@ void paintButton(NMCUSTOMDRAW* draw, const Theme& t) {
                 RestoreDC(draw->hdc,saved); return;
             }
             if(GetDlgItem(GetParent(button),IDC_METHOD_DIRECT) && !check) {
-                rounded(draw->hdc,r,primary ? GetSysColor(COLOR_HIGHLIGHT) : t.input,primary ? GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_GRAYTEXT),MulDiv(7,GetDpiForWindow(button),96));
+                rounded(draw->hdc,r,color(primary ? GetSysColor(COLOR_HIGHLIGHT) : t.input),color(primary ? GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_GRAYTEXT)),MulDiv(7,GetDpiForWindow(button),96));
                 SetTextColor(draw->hdc,primary ? GetSysColor(COLOR_HIGHLIGHTTEXT) : t.foreground); SetBkMode(draw->hdc,TRANSPARENT);
                 auto value=label(button); DrawTextW(draw->hdc,value.c_str(),-1,&text,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
                 if(draw->uItemState&CDIS_FOCUS)drawKeyboardFocus(button,draw->hdc,r,primary);
                 RestoreDC(draw->hdc,saved); return;
             }
-            if(!check) rounded(draw->hdc,r,primary ? GetSysColor(COLOR_HIGHLIGHT) : t.dark ? (pressed ? RGB(65,65,65) : RGB(48,48,48)) : GetSysColor(COLOR_BTNFACE),primary ? GetSysColor(COLOR_HIGHLIGHT) : t.dark ? RGB(78,78,78) : GetSysColor(COLOR_3DSHADOW),MulDiv(7,GetDpiForWindow(button),96));
+            if(!check) rounded(draw->hdc,r,color(primary ? GetSysColor(COLOR_HIGHLIGHT) : t.dark ? RGB(48,48,48) : GetSysColor(COLOR_BTNFACE)),color(primary ? GetSysColor(COLOR_HIGHLIGHT) : t.dark ? RGB(78,78,78) : GetSysColor(COLOR_3DSHADOW)),MulDiv(7,GetDpiForWindow(button),96));
             if(check) {
                 const int size=MulDiv(14,GetDpiForWindow(button),96);
                 RECT box{r.left,(r.bottom+r.top-size)/2,r.left+size,(r.bottom+r.top+size)/2};
+                fill(draw->hdc,box,color(t.input));
                 border(draw->hdc,box,disabled?GetSysColor(COLOR_GRAYTEXT):t.dark?RGB(160,160,160):GetSysColor(COLOR_WINDOWFRAME));
                 if(draw->uItemState&CDIS_FOCUS)drawKeyboardFocus(button,draw->hdc,box);
                 if(SendMessageW(button,BM_GETCHECK,0,0)==BST_CHECKED) {
@@ -308,6 +329,7 @@ void paintButton(NMCUSTOMDRAW* draw, const Theme& t) {
     RestoreDC(draw->hdc,saved);
 }
 LRESULT CALLBACK buttonProc(HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR) {
+    if(GetDlgCtrlID(window)<IDC_READER_PREVIOUS || GetDlgCtrlID(window)>IDC_READER_FULLSCREEN)trackHover(window,message,wp,lp);
     // Owner-drawn controls (including reader overlays) supply their own visuals.
     if((GetWindowLongPtrW(window,GWL_STYLE)&BS_TYPEMASK)==BS_OWNERDRAW)
         return DefSubclassProc(window,message,wp,lp);
@@ -319,7 +341,7 @@ LRESULT CALLBACK buttonProc(HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PT
         paintButton(&draw,*t); EndPaint(window,&paint); return 0;
     }
     auto result=DefSubclassProc(window,message,wp,lp);
-    if(message==BM_SETCHECK || message==WM_SETFOCUS || message==WM_KILLFOCUS || message==WM_ENABLE || message==WM_UPDATEUISTATE)
+    if(message==BM_SETSTATE || message==BM_SETCHECK || message==WM_SETFOCUS || message==WM_KILLFOCUS || message==WM_ENABLE || message==WM_UPDATEUISTATE)
         InvalidateRect(window,nullptr,FALSE);
     return result;
 }
@@ -415,6 +437,12 @@ LRESULT CALLBACK dialogProc(HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PT
         return result;
     }
     if(message==WM_SETTINGCHANGE || message==WM_SYSCOLORCHANGE || message==WM_THEMECHANGED) refresh(window,t);
+    // The unused list area belongs to the same panel as its owner-drawn rows.
+    if(message==WM_CTLCOLORLISTBOX && GetDlgCtrlID(reinterpret_cast<HWND>(lp))==IDC_FILE_LIST) {
+        auto dc=reinterpret_cast<HDC>(wp);
+        SetTextColor(dc,t.foreground); SetBkColor(dc,t.panel);
+        return reinterpret_cast<LRESULT>(t.panelBrush);
+    }
     if(message==WM_CTLCOLORDLG || message==WM_CTLCOLORSTATIC || message==WM_CTLCOLOREDIT || message==WM_CTLCOLORLISTBOX || message==WM_CTLCOLORBTN) {
         if(t.dark || GetDlgItem(window,IDC_METHOD_DIRECT)) {
             auto dc=reinterpret_cast<HDC>(wp); auto control=reinterpret_cast<HWND>(lp);
@@ -518,6 +546,16 @@ void drawKeyboardFocus(HWND window,HDC dc,RECT bounds,bool selected) {
     auto oldPen=SelectObject(dc,pen),oldBrush=SelectObject(dc,GetStockObject(NULL_BRUSH));
     const int radius=MulDiv(6,GetDpiForWindow(window),96);RoundRect(dc,bounds.left,bounds.top,bounds.right,bounds.bottom,radius,radius);
     SelectObject(dc,oldBrush);SelectObject(dc,oldPen);DeleteObject(pen);
+}
+bool controlHovered(HWND window) {return IsWindowEnabled(window)&&IsWindowVisible(window)&&GetPropW(window,HoverProperty)!=nullptr;}
+COLORREF interactionColor(HWND window,COLORREF base,bool hot,bool pressed) {
+    if(!IsWindowEnabled(window)||highContrast()||(!hot&&!pressed))return base;
+    const auto root=themedAncestor(window);
+    const bool dark=root&&usesDarkTheme(root);
+    const int target=dark?255:0;
+    const int amount=pressed?24:12;
+    auto mix=[&](int value){return (value*(100-amount)+target*amount)/100;};
+    return RGB(mix(GetRValue(base)),mix(GetGValue(base)),mix(GetBValue(base)));
 }
 bool usesDarkTheme(HWND window) { auto t=theme(window); return t && t->dark; }
 HBRUSH dialogBackground(HWND window) { auto t=theme(window); return t ? t->background : GetSysColorBrush(COLOR_3DFACE); }

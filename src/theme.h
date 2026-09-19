@@ -5,6 +5,9 @@ namespace books {
 inline constexpr UINT DialogShortcut=WM_APP+95;
 void applyTheme(HWND window);
 bool usesDarkTheme(HWND window);
+// Shared visual state for app-owned controls, including owner-drawn actions.
+bool controlHovered(HWND window);
+COLORREF interactionColor(HWND window, COLORREF base, bool hot, bool pressed = false);
 bool focusCuesVisible(HWND window);
 void updateFocusCues(HWND window, bool keyboard);
 void drawKeyboardFocus(HWND window, HDC dc, RECT bounds, bool selected = false);
