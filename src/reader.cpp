@@ -312,6 +312,7 @@ struct Reader::Impl:std::enable_shared_from_this<Reader::Impl> {
         SetDlgItemTextW(dialog,IDC_FULLSCREEN_READER,image?L"View in full screen":L"Read in full screen");
         available=epub||plainText||rtf||html||docx;show();
     }
+    void focusContent(HWND target){if(IsWindowVisible(dialog)&&!IsIconic(dialog))SetFocus(target);}
     void show(){
         auto fullscreenLabel=isFull?L"Exit full screen (Esc or F11)":L"Enter full screen (F11)";
         SetWindowTextW(buttons[2],fullscreenLabel);
@@ -424,10 +425,10 @@ struct Reader::Impl:std::enable_shared_from_this<Reader::Impl> {
         if(!result||result->version!=generation)return;
         if(doc&&!converted&&!plainText){if(!result->conversion.document){conversionFailure(result->conversion.error);return;}converted=std::move(result->conversion.document);startWeb();return;}
         if(!epub)endLoading();
-        if(plainText){if(result->text){if(result->extracted)extracted=std::move(result->extracted);SetWindowTextW(textView,result->text->text.c_str());textIndex=result->text->index;textEncoding=result->text->encoding;textLast=result->text->last;available=true;active=true;opening=false;show();if(textBottom){SendMessageW(textView,EM_LINESCROLL,0,INT_MAX/2);textBottom=false;}textState();SetFocus(textView);}else failure();}
-        else if(rtf){if(result->bitmap){if(bitmap)DeleteObject(bitmap);bitmap=result->bitmap;result->bitmap=nullptr;SetTimer(host,5,1000,nullptr);rtfAnchor=result->rich.anchor;rtfNext=result->rich.next;atStart=rtfAnchor==0;atEnd=rtfNext>=result->rich.length;active=true;opening=false;RECT r{};GetClientRect(host,&r);renderedWidth=r.right;renderedHeight=r.bottom;show();SetFocus(host);InvalidateRect(host,nullptr,TRUE);}else formattedFailure();}
+        if(plainText){if(result->text){if(result->extracted)extracted=std::move(result->extracted);SetWindowTextW(textView,result->text->text.c_str());textIndex=result->text->index;textEncoding=result->text->encoding;textLast=result->text->last;available=true;active=true;opening=false;show();if(textBottom){SendMessageW(textView,EM_LINESCROLL,0,INT_MAX/2);textBottom=false;}textState();focusContent(textView);}else failure();}
+        else if(rtf){if(result->bitmap){if(bitmap)DeleteObject(bitmap);bitmap=result->bitmap;result->bitmap=nullptr;SetTimer(host,5,1000,nullptr);rtfAnchor=result->rich.anchor;rtfNext=result->rich.next;atStart=rtfAnchor==0;atEnd=rtfNext>=result->rich.length;active=true;opening=false;RECT r{};GetClientRect(host,&r);renderedWidth=r.right;renderedHeight=r.bottom;show();focusContent(host);InvalidateRect(host,nullptr,TRUE);}else formattedFailure();}
         else if(epub){resources=result->resources;available=resources!=nullptr;if(available&&opening)startWeb();else if(!available)failure();}
-        else if(result->bitmap){if(bitmap)DeleteObject(bitmap);bitmap=result->bitmap;result->bitmap=nullptr;page=result->page;atEnd=page+1>=pages;active=page>0;RECT r{};GetClientRect(host,&r);renderedWidth=r.right;renderedHeight=r.bottom;show();SetFocus(host);InvalidateRect(host,nullptr,TRUE);}
+        else if(result->bitmap){if(bitmap)DeleteObject(bitmap);bitmap=result->bitmap;result->bitmap=nullptr;page=result->page;atEnd=page+1>=pages;active=page>0;RECT r{};GetClientRect(host,&r);renderedWidth=r.right;renderedHeight=r.bottom;show();focusContent(host);InvalidateRect(host,nullptr,TRUE);}
         else failure();
         hover(-1,-1);
     }
@@ -543,7 +544,7 @@ void Reader::Impl::configureWeb() {
         if(message==L"host-ready"&&self->docx)self->web->PostWebMessageAsString(L"open-docx");
         else if(message==L"host-ready"&&self->html)self->web->PostWebMessageAsString(L"open-html");
         else if(message==L"host-ready"&&self->resources){auto open=L"open:https://book.invalid/"+encodedPath(self->resources->package);if(self->previewHasCover&&!self->resources->coverImage.empty())open+=L"\nhttps://book.invalid/"+encodedPath(self->resources->coverImage);self->web->PostWebMessageAsString(open.c_str());}
-        else if(message==L"ready"){KillTimer(self->host,2);self->endLoading();self->opening=false;self->active=true;self->show();self->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);}
+        else if(message==L"ready"){KillTimer(self->host,2);self->endLoading();self->opening=false;self->active=true;self->show();if(IsWindowVisible(self->dialog)&&!IsIconic(self->dialog))self->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);}
         else if(message.starts_with(L"done:")||message.starts_with(L"failed:")){
             auto split=message.find(L':');wchar_t* end=nullptr;auto id=wcstoull(message.c_str()+split+1,&end,10);
             if(end&&!*end&&self->loading&&id==self->activity.identity){if(message.starts_with(L"failed:")){if(self->html||self->docx)self->formattedFailure();else self->failure();}else{self->endLoading();self->hover(-1,-1);}}
