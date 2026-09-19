@@ -148,18 +148,23 @@ int wmain(int argc,wchar_t** argv) {
         script(reader->web.Get(),L"window.networkProbe='pending';fetch('https://example.com/reader-test').then(()=>window.networkProbe='allowed').catch(()=>window.networkProbe='blocked')");
         CHECK(waitFor([&]{return script(reader->web.Get(),L"window.networkProbe")==L"\"blocked\"";}));
         auto cfi=script(reader->web.Get(),L"locationCfi");books::toggleFullscreen(window,state);
-        CHECK(waitFor([&]{return script(reader->web.Get(),L"innerWidth")!=L"0";}));
+        CHECK(waitFor([&]{return !reader->loading;}));
+        CHECK(script(reader->web.Get(),L"innerWidth")!=L"0");
         books::toggleFullscreen(window,state);CHECK(reader->active);
-        CHECK(waitFor([&]{return script(reader->web.Get(),L"locationCfi")==cfi;}));
+        CHECK(waitFor([&]{return !reader->loading;}));
+        CHECK(script(reader->web.Get(),L"locationCfi")==cfi);
         reader->navigate(-1);CHECK(!reader->active);reader->navigate(1);CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->active);
-        for(int i=0;i<3;++i){auto previous=script(reader->web.Get(),L"locationCfi");reader->navigate(1);CHECK(waitFor([&]{return script(reader->web.Get(),L"locationCfi")!=previous;}));}
+        // Position/state notifications precede the bridge's loading completion.
+        // Wait for completion before issuing another user action.
+        for(int i=0;i<3;++i){auto previous=script(reader->web.Get(),L"locationCfi");reader->navigate(1);CHECK(waitFor([&]{return !reader->loading;}));CHECK(script(reader->web.Get(),L"locationCfi")!=previous);}
         script(reader->web.Get(),L"(()=>{const f=document.querySelector('iframe'),r=f.getBoundingClientRect();f.contentDocument.dispatchEvent(new MouseEvent('mousemove',{clientX:(innerWidth-2-r.left)*f.clientWidth/r.width,clientY:(100-r.top)*f.clientHeight/r.height}));})()");
         CHECK(waitFor([&]{return IsWindowVisible(reader->buttons[1])!=FALSE;}));
         auto anchor=script(reader->web.Get(),L"anchorCfi");books::toggleFullscreen(window,state);
+        CHECK(waitFor([&]{return !reader->loading;}));
         CHECK(waitFor([&]{return script(reader->web.Get(),L"Math.abs(rendition.manager._stageSize.width - innerWidth) < 1")==L"true";}));
         capture(reader->web.Get(),L"reader-fullscreen.png");
-        books::toggleFullscreen(window,state);CHECK(waitFor([&]{return script(reader->web.Get(),L"Math.abs(rendition.manager._stageSize.width - innerWidth) < 1")==L"true";}));CHECK(script(reader->web.Get(),L"anchorCfi")==anchor);
-        for(int i=0;i<150&&!reader->atEnd;++i){auto previous=script(reader->web.Get(),L"locationCfi");reader->navigate(1);CHECK(waitFor([&]{return reader->atEnd||script(reader->web.Get(),L"locationCfi")!=previous;}));}
+        books::toggleFullscreen(window,state);CHECK(waitFor([&]{return !reader->loading;}));CHECK(script(reader->web.Get(),L"Math.abs(rendition.manager._stageSize.width - innerWidth) < 1")==L"true");CHECK(script(reader->web.Get(),L"anchorCfi")==anchor);
+        for(int i=0;i<150&&!reader->atEnd;++i){auto previous=script(reader->web.Get(),L"locationCfi");reader->navigate(1);CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->atEnd||script(reader->web.Get(),L"locationCfi")!=previous);}
         CHECK(reader->atEnd&&!reader->can(1));CHECK(script(reader->web.Get(),L"document.querySelector('iframe').contentDocument.body.textContent").find(L"Second chapter")!=std::wstring::npos);
     }
     reader->select(root/L"fixed.epub");CHECK(waitFor([&]{return !reader->loading;}));SendMessageW(window,WM_COMMAND,IDC_FULLSCREEN_READER,0);CHECK(state.fullscreen&&!reader->active);reader->navigate(1);CHECK(waitFor([&]{return !reader->loading;},30000));CHECK(reader->active&&state.fullscreen);
@@ -242,9 +247,9 @@ int wmain(int argc,wchar_t** argv) {
             CHECK(script(reader->web.Get(),L"getComputedStyle(htmlFrame.contentDocument.querySelector('h1')).color")==L"\"rgb(0, 128, 128)\"");
             CHECK(script(reader->web.Get(),L"htmlFrame.contentDocument.querySelector('img').naturalWidth")==L"0");
             CHECK(script(reader->web.Get(),L"getComputedStyle(htmlFrame.contentDocument.body).color")!=L"\"rgb(255, 0, 0)\"");
-            capture(reader->web.Get(),L"reader-html.png");reader->navigate(1);CHECK(waitFor([&]{return !reader->atStart;}));
-            auto anchor=script(reader->web.Get(),L"htmlFrame.contentDocument.scrollingElement.scrollTop");reader->key(VK_F11);CHECK(waitFor([&]{return !reader->web||script(reader->web.Get(),L"htmlFrame.clientHeight===innerHeight")==L"true";}));reader->key(VK_ESCAPE);CHECK(waitFor([&]{return !reader->web||script(reader->web.Get(),L"htmlFrame.contentDocument.scrollingElement.scrollTop")==anchor;}));
-            reader->navigate(-1);CHECK(waitFor([&]{return reader->atStart;}));reader->navigate(-1);CHECK(!reader->active&&!reader->web);
+            capture(reader->web.Get(),L"reader-html.png");reader->navigate(1);CHECK(waitFor([&]{return !reader->loading;}));CHECK(!reader->atStart);
+            auto anchor=script(reader->web.Get(),L"htmlFrame.contentDocument.scrollingElement.scrollTop");reader->key(VK_F11);CHECK(waitFor([&]{return !reader->loading;}));CHECK(waitFor([&]{return !reader->web||script(reader->web.Get(),L"htmlFrame.clientHeight===innerHeight")==L"true";}));reader->key(VK_ESCAPE);CHECK(waitFor([&]{return !reader->loading;}));CHECK(waitFor([&]{return !reader->web||script(reader->web.Get(),L"htmlFrame.contentDocument.scrollingElement.scrollTop")==anchor;}));
+            reader->navigate(-1);CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->atStart);reader->navigate(-1);CHECK(!reader->active&&!reader->web);
         }
     }
     }
@@ -259,16 +264,16 @@ int wmain(int argc,wchar_t** argv) {
         CHECK(script(reader->web.Get(),L"!htmlFrame.contentDocument.querySelector('a[href],iframe,script,object')&&!htmlFrame.contentDocument.body.textContent.includes('UNSAFE CHUNK')")==L"true");
         CHECK(waitFor([&]{return script(reader->web.Get(),L"htmlFrame.contentDocument.querySelector('img')?.naturalWidth>0")==L"true";}));
         capture(reader->web.Get(),L"reader-docx.png");
-        reader->navigate(1);CHECK(waitFor([&]{return !reader->atStart;}));
+        reader->navigate(1);CHECK(waitFor([&]{return !reader->loading;}));CHECK(!reader->atStart);
         auto anchor=script(reader->web.Get(),L"htmlFrame.contentDocument.scrollingElement.scrollTop");
-        reader->key(VK_F11);CHECK(waitFor([&]{return script(reader->web.Get(),L"htmlFrame.clientHeight===innerHeight")==L"true";}));
-        reader->key(VK_ESCAPE);CHECK(waitFor([&]{return script(reader->web.Get(),(L"Math.abs(htmlFrame.contentDocument.scrollingElement.scrollTop-"+anchor+L")<2").c_str())==L"true";}));
+        reader->key(VK_F11);CHECK(waitFor([&]{return !reader->loading;}));CHECK(waitFor([&]{return script(reader->web.Get(),L"htmlFrame.clientHeight===innerHeight")==L"true";}));
+        reader->key(VK_ESCAPE);CHECK(waitFor([&]{return !reader->loading;}));CHECK(waitFor([&]{return script(reader->web.Get(),(L"Math.abs(htmlFrame.contentDocument.scrollingElement.scrollTop-"+anchor+L")<2").c_str())==L"true";}));
         script(reader->web.Get(),L"htmlFrame.contentWindow.scrollTo(0,1e9);htmlState()");CHECK(waitFor([&]{return reader->atEnd;}));CHECK(!reader->can(1));
         capture(reader->web.Get(),L"reader-docx-end.png");
         script(reader->web.Get(),L"htmlFrame.contentWindow.scrollTo(0,0);htmlState()");CHECK(waitFor([&]{return reader->atStart;}));reader->navigate(-1);CHECK(!reader->active&&!reader->web);
     }
     reader->select(root/L"single.docx");reader->navigate(1);CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->active);
-    if(reader->web){reader->fallbackChoice=[]{return 101;};reader->webBudget=1;reader->checkWebMemory();CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->active&&reader->plainText&&reader->extracted&&!reader->web);reader->fallbackChoice=[]{return 0;};}
+    if(reader->web){reader->fallbackChoice=[]{return IDC_READ_AS_TEXT;};reader->webBudget=1;reader->checkWebMemory();CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->active&&reader->plainText&&reader->extracted&&!reader->web);reader->fallbackChoice=[]{return 0;};}
     for(auto name:{L"bad.docx",L"encrypted.docx",L"xml-bad.docx",L"dtd.docx",L"traversal.docx"}){
         CHECK(!books::extractDocxText(root/name,[]{return false;}));
         reader->select(root/name);reader->navigate(1);CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->failed&&!reader->active);
@@ -276,7 +281,7 @@ int wmain(int argc,wchar_t** argv) {
     {
         wchar_t previousRuntime[32768]{};auto runtimeLength=GetEnvironmentVariableW(L"WEBVIEW2_BROWSER_EXECUTABLE_FOLDER",previousRuntime,32768);
         SetEnvironmentVariableW(L"WEBVIEW2_BROWSER_EXECUTABLE_FOLDER",(root/L"missing-runtime").c_str());
-        reader->fallbackChoice=[]{return 101;};reader->select(root/L"read.docx");reader->navigate(1);
+        reader->fallbackChoice=[]{return IDC_READ_AS_TEXT;};reader->select(root/L"read.docx");reader->navigate(1);
         CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->active&&reader->plainText&&reader->extracted&&!reader->web);
         SetEnvironmentVariableW(L"WEBVIEW2_BROWSER_EXECUTABLE_FOLDER",runtimeLength?previousRuntime:nullptr);reader->fallbackChoice=[]{return 0;};
     }
@@ -294,7 +299,7 @@ int wmain(int argc,wchar_t** argv) {
     }
     CHECK(!books::extractReaderText(root/L"read.html",false,[]{return true;}));
     reader->select(root/L"embedded.html");reader->navigate(1);CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->active);
-    if(reader->web){CHECK(script(reader->web.Get(),L"htmlFrame.contentDocument.querySelector('img').naturalWidth")==L"20");reader->fallbackChoice=[]{return 101;};reader->webBudget=1;reader->checkWebMemory();CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->active&&reader->plainText&&reader->extracted&&!reader->web);reader->fallbackChoice=[]{return 0;};}
+    if(reader->web){CHECK(script(reader->web.Get(),L"htmlFrame.contentDocument.querySelector('img').naturalWidth")==L"20");reader->fallbackChoice=[]{return IDC_READ_AS_TEXT;};reader->webBudget=1;reader->checkWebMemory();CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->active&&reader->plainText&&reader->extracted&&!reader->web);reader->fallbackChoice=[]{return 0;};}
     reader->select(root/L"oversized.txt");reader->navigate(1);CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->active&&!reader->textLast);CHECK(GetWindowTextLengthW(reader->textView)<=books::ReaderTextWindow+4);
     {auto late=books::loadReaderTextChunk(root/L"late-legacy.txt",1);CHECK(late&&late->text==L"caf\u00e9");}
     {

@@ -207,6 +207,9 @@ document.addEventListener('mousemove',event=>send('pointer:'+event.clientX+','+e
 // Identities are opaque strings; the native session rejects stale completion.
 let operations=Promise.resolve();
 async function resizeReader() {
+  // Native bounds and this message can arrive before WebView2 updates its viewport.
+  // Measure after paint opportunities, not in the message's current frame.
+  await painted();
   if(htmlFrame)restoreHtml();
   else if(rendition){rendition.resize(innerWidth,innerHeight,anchorCfi);await rendition.display(anchorCfi);}
 }

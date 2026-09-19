@@ -29,15 +29,21 @@ async function run(){
   messages.length=0;
   vm.runInContext(`let resolvePage,resolveImage,resolveLayout;
     const testDocument={images:[{decode:()=>new Promise(resolve=>resolveImage=resolve)}],fonts:{ready:Promise.resolve()}};
+    let resizedViewport;
     rendition={next:()=>new Promise(resolve=>resolvePage=resolve),prev:()=>Promise.resolve(),
-      getContents:()=>[{document:testDocument}],resize:()=>{},display:()=>new Promise(resolve=>resolveLayout=resolve)};
+      getContents:()=>[{document:testDocument}],resize:(width,height)=>{resizedViewport=[width,height];},display:()=>new Promise(resolve=>resolveLayout=resolve)};
     operation('101','next');`,context);
   await flush();assert.deepEqual(messages,[],'dispatch is not completion');
   vm.runInContext('resolvePage()',context);await flush();assert.deepEqual(messages,[],'wait for image decode');
   vm.runInContext('resolveImage()',context);await flush();assert.deepEqual(messages,['done:101']);
   messages.length=0;
   vm.runInContext("testDocument.images=[];operation('102','resize');operation('103','previous');",context);
+  // The native resize message can precede the browser's viewport update.
+  for(let i=0;i<10;i++)await Promise.resolve();
+  assert.equal(vm.runInContext('resizedViewport',context),undefined,'resize does not measure the old viewport');
+  context.innerWidth=1024;context.innerHeight=768;
   await flush();assert.deepEqual(messages,[],'resize waits for EPUB display');
+  assert.deepEqual(Array.from(vm.runInContext('resizedViewport',context)),[1024,768],'resize uses the updated viewport');
   vm.runInContext('resolveLayout()',context);await flush();assert.deepEqual(messages,['done:102','done:103'],'operations retain identity and order');
   messages.length=0;
   vm.runInContext("rendition.next=()=>Promise.reject(new Error('layout failed'));operation('104','next');",context);
