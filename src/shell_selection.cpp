@@ -53,11 +53,12 @@ public:
     HRESULT STDMETHODCALLTYPE LockServer(BOOL) override { return S_OK; }
 };
 }
-std::vector<fs::path> receiveShellSelection(const wchar_t* classId) {
+std::vector<fs::path> receiveShellSelection(const wchar_t* classId,HANDLE readyEvent) {
     CLSID id{}; if(FAILED(CLSIDFromString(classId,&id))) throw std::runtime_error("Invalid Explorer integration identifier.");
     auto selection=std::make_shared<Selection>(); auto factory=new Factory(selection); DWORD cookie=0;
     auto hr=CoRegisterClassObject(id,factory,CLSCTX_LOCAL_SERVER,REGCLS_SINGLEUSE,&cookie); factory->Release();
     if(FAILED(hr)) throw std::runtime_error("Could not receive the Explorer selection.");
+    if(readyEvent) SetEvent(readyEvent);
     // A bounded wait covers a cancelled Shell activation without a resident process.
     const auto deadline=GetTickCount64()+60000;
     while(!selection->done && GetTickCount64()<deadline) {
