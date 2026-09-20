@@ -226,7 +226,11 @@ void toggleFullscreen(HWND window,Browser& state) {
         state.childPlacements.clear();
     }
     EnableWindow(GetDlgItem(window,IDC_REFRESH),!state.fullscreen);
-    state.reader->fullscreen(state.fullscreen);SetFocus(state.reader->reading()?state.reader->window():cover);InvalidateRect(window,nullptr,TRUE);
+    state.reader->fullscreen(state.fullscreen);
+    // Re-measure after restored child placement so the active WebView reflows
+    // to the smaller browse preview viewport.
+    state.reader->resize();
+    SetFocus(state.reader->reading()?state.reader->window():cover);InvalidateRect(window,nullptr,TRUE);
     // Decode image previews for the new viewport instead of stretching a thumbnail.
     auto format=fileFormat(state.current.extension().wstring());
     if(format&&std::string(format->mime).starts_with("image/")) {

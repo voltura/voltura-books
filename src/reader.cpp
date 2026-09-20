@@ -102,6 +102,9 @@ const wchar_t* mime(const std::string& name) {
 }
 struct Reader::Impl:std::enable_shared_from_this<Reader::Impl> {
     HWND dialog{},cover{},host{},webHost{},buttons[3]{},tooltip{},fullscreenNotice{};
+    int lastHoverX=-1,lastHoverY=-1;
+    bool pointerInHost=false;
+    bool hoverSuppressed=false;
     std::function<void()> toggle;
     std::function<int()> fallbackChoice;
     std::filesystem::path path;
@@ -171,7 +174,7 @@ struct Reader::Impl:std::enable_shared_from_this<Reader::Impl> {
         if(msg==WM_SETFOCUS&&self->plainText&&self->active){SetFocus(self->textView);return 0;}
         if(msg==WM_CTLCOLORSTATIC&&(reinterpret_cast<HWND>(lp)==self->textView||reinterpret_cast<HWND>(lp)==self->textNotice)){auto dc=reinterpret_cast<HDC>(wp);bool dark=usesDarkTheme(self->dialog);SetTextColor(dc,dark?RGB(240,240,240):RGB(25,25,25));SetBkColor(dc,dark?RGB(32,32,32):GetSysColor(COLOR_WINDOW));return reinterpret_cast<LRESULT>(panelBackground(self->dialog));}
         if(msg==WM_COMMAND&&reinterpret_cast<HWND>(lp)==self->textView){if(HIWORD(wp)==EN_VSCROLL)self->textState();return 0;}
-        if(msg==WM_TIMER&&wp==1){KillTimer(window,1);self->hover(-1,-1);return 0;}
+        if(msg==WM_TIMER&&wp==1){KillTimer(window,1);self->hoverSuppressed=true;self->hover(-1,-1);return 0;}
         if(msg==WM_TIMER&&wp==2){KillTimer(window,2);if(self->loading){if(self->html||self->docx)self->formattedFailure();else self->failure();}return 0;}
         if(msg==WM_TIMER&&wp==6){self->bootstrapReady();return 0;}
         if(msg==WM_TIMER&&wp==4){self->checkWebMemory();return 0;}
@@ -181,7 +184,7 @@ struct Reader::Impl:std::enable_shared_from_this<Reader::Impl> {
         if(msg==WM_DRAWITEM){self->drawButton(*reinterpret_cast<DRAWITEMSTRUCT*>(lp));return TRUE;}
         if(msg==WM_PAINT){PAINTSTRUCT ps{};auto dc=BeginPaint(window,&ps);RECT r{};GetClientRect(window,&r);FillRect(dc,&r,panelBackground(self->dialog));if(self->bitmap)drawBookCover(dc,r,self->bitmap,L".pdf");EndPaint(window,&ps);return 0;}
         if(msg==WM_MOUSEMOVE){self->hover(GET_X_LPARAM(lp),GET_Y_LPARAM(lp));TRACKMOUSEEVENT track{sizeof(track),TME_LEAVE,window,0};TrackMouseEvent(&track);return 0;}
-        if(msg==WM_MOUSELEAVE){self->hover(-1,-1);return 0;}
+        if(msg==WM_MOUSELEAVE){self->pointerInHost=false;self->hover(-1,-1);return 0;}
         if(msg==WM_LBUTTONDOWN){SetFocus(window);return 0;}
         if(msg==WM_GETDLGCODE)return DLGC_WANTARROWS|DLGC_WANTCHARS|DLGC_WANTTAB;
         if(msg==WM_KEYDOWN){if(self->key(static_cast<UINT>(wp)))return 0;}
@@ -191,7 +194,7 @@ struct Reader::Impl:std::enable_shared_from_this<Reader::Impl> {
     static LRESULT CALLBACK coverProc(HWND window,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR data) {
         auto self=reinterpret_cast<Impl*>(data);
         if(msg==WM_MOUSEMOVE){self->hover(GET_X_LPARAM(lp),GET_Y_LPARAM(lp));TRACKMOUSEEVENT track{sizeof(track),TME_LEAVE,window,0};TrackMouseEvent(&track);}
-        if(msg==WM_MOUSELEAVE)self->hover(-1,-1);
+        if(msg==WM_MOUSELEAVE){self->pointerInHost=false;self->hover(-1,-1);}
         if(msg==WM_LBUTTONDOWN)SetFocus(window);
         if(msg==WM_GETDLGCODE)return DLGC_WANTARROWS|DLGC_WANTCHARS|DLGC_WANTTAB;
         if(msg==WM_KEYDOWN&&self->key(static_cast<UINT>(wp)))return 0;
@@ -206,7 +209,7 @@ struct Reader::Impl:std::enable_shared_from_this<Reader::Impl> {
         if(msg==WM_KEYDOWN&&(wp==VK_RETURN||wp==VK_SPACE)){SendMessageW(self->host,WM_COMMAND,GetDlgCtrlID(window),0);return 0;}
         if(msg==WM_KEYDOWN&&wp==VK_TAB){int current=GetDlgCtrlID(window)-IDC_READER_PREVIOUS;int delta=GetKeyState(VK_SHIFT)<0?-1:1;for(int i=current+delta;i>=0&&i<3;i+=delta)if(self->can(i)){ShowWindow(self->buttons[i],SW_SHOW);SetFocus(self->buttons[i]);return 0;}SetFocus(self->isFull?self->host:GetNextDlgTabItem(self->dialog,self->cover,delta<0));return 0;}
         if(msg==WM_MOUSEMOVE){POINT p{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};MapWindowPoints(window,self->host,&p,1);self->hover(p.x,p.y);TRACKMOUSEEVENT track{sizeof(track),TME_LEAVE,window,0};TrackMouseEvent(&track);}
-        if(msg==WM_MOUSELEAVE)self->hover(-1,-1);
+        if(msg==WM_MOUSELEAVE){self->pointerInHost=false;self->hover(-1,-1);}
         return DefSubclassProc(window,msg,wp,lp);
     }
     static LRESULT CALLBACK textProc(HWND window,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR data) {
@@ -214,7 +217,7 @@ struct Reader::Impl:std::enable_shared_from_this<Reader::Impl> {
         if(msg==WM_GETDLGCODE)return DLGC_WANTARROWS|DLGC_WANTCHARS|DLGC_WANTTAB;
         if(msg==WM_KEYDOWN&&self->key(static_cast<UINT>(wp)))return 0;
         if(msg==WM_MOUSEMOVE){POINT p{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};MapWindowPoints(window,self->host,&p,1);self->hover(p.x,p.y);TRACKMOUSEEVENT track{sizeof(track),TME_LEAVE,window,0};TrackMouseEvent(&track);}
-        if(msg==WM_MOUSELEAVE)self->hover(-1,-1);
+        if(msg==WM_MOUSELEAVE){self->pointerInHost=false;self->hover(-1,-1);}
         if((msg==WM_MOUSEWHEEL||msg==WM_VSCROLL||msg==WM_KEYDOWN)&&self->active&&!self->loading){
             auto scroll=self->textScroll();
             bool down=(msg==WM_MOUSEWHEEL&&GET_WHEEL_DELTA_WPARAM(wp)<0)||(msg==WM_VSCROLL&&(LOWORD(wp)==SB_PAGEDOWN||LOWORD(wp)==SB_LINEDOWN))||(msg==WM_KEYDOWN&&(wp==VK_NEXT||wp==VK_DOWN));
@@ -231,7 +234,8 @@ struct Reader::Impl:std::enable_shared_from_this<Reader::Impl> {
         SCROLLINFO scroll{sizeof(scroll),SIF_RANGE|SIF_PAGE|SIF_POS};scroll.nMax=(std::max)(0,static_cast<int>(SendMessageW(textView,EM_GETLINECOUNT,0,0))-1);
         scroll.nPage=(std::max)(1L,(rect.bottom-rect.top)/(std::max)(1L,metrics.tmHeight));scroll.nPos=static_cast<int>(SendMessageW(textView,EM_GETFIRSTVISIBLELINE,0,0));return scroll;
     }
-    void textState(){if(!plainText||!active)return;auto scroll=textScroll();SetScrollInfo(textBar,SB_CTL,&scroll,FALSE);InvalidateRect(textBar,nullptr,FALSE);atStart=textIndex==0&&scroll.nPos==0;atEnd=textLast&&scroll.nPos+static_cast<int>(scroll.nPage)>scroll.nMax;hover(-1,-1);}
+    void refreshHover(){if(pointerInHost&&!hoverSuppressed)hover(lastHoverX,lastHoverY);else hover(-1,-1);}
+    void textState(){if(!plainText||!active)return;auto scroll=textScroll();SetScrollInfo(textBar,SB_CTL,&scroll,FALSE);InvalidateRect(textBar,nullptr,FALSE);atStart=textIndex==0&&scroll.nPos==0;atEnd=textLast&&scroll.nPos+static_cast<int>(scroll.nPage)>scroll.nMax;refreshHover();}
     static LRESULT CALLBACK noticeProc(HWND window,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR) {
         if(msg==WM_PAINT){
             PAINTSTRUCT paint{};auto dc=BeginPaint(window,&paint);RECT r{};GetClientRect(window,&r);
@@ -296,7 +300,7 @@ struct Reader::Impl:std::enable_shared_from_this<Reader::Impl> {
     void request(unsigned target,bool archive=false,bool extract=false,bool view=false) {
         RECT r{};GetClientRect(host,&r);beginLoading(!active?ReaderOperation::Opening:view?ReaderOperation::View:ReaderOperation::Page);
         {std::lock_guard lock(work->mutex);work->version=++generation;work->path=readerPath();work->converted=converted;work->convert=doc&&!converted&&!extract;work->page=target;work->width=r.right;work->height=r.bottom;work->epub=archive;work->plainText=plainText;work->rtf=rtf;work->back=rtfBack;work->dpi=GetDpiForWindow(dialog);work->chunk=textIndex;work->encoding=textEncoding;work->extract=extract;work->extractRtf=fileFormat(path.extension().wstring())==&FileFormats[2];work->extracted=extracted;work->pending=true;work->result.reset();}
-        work->wake.notify_one();hover(-1,-1);
+        work->wake.notify_one();refreshHover();
     }
     void select(const std::filesystem::path& next) {
         imageReady=false;
@@ -330,11 +334,13 @@ struct Reader::Impl:std::enable_shared_from_this<Reader::Impl> {
         ShowWindow(textView,active&&plainText?SW_SHOW:SW_HIDE);ShowWindow(textBar,active&&plainText?SW_SHOW:SW_HIDE);
         ShowWindow(textNotice,active&&plainText&&extracted?SW_SHOW:SW_HIDE);
         if(controller)controller->put_IsVisible(active||preparing);
-        resize();hover(-1,-1);
+        resize();
+        refreshHover();
     }
     bool can(int i)const {return i==0?active&&(epub||plainText||rtf||html||docx||page>0):i==1?available&&!loading&&(!active||!atEnd):active||isFull||(!failed&&(available||pages>0||imageReady));}
     int edgeWidth()const {RECT r{};GetClientRect(host,&r);return (std::max)(1,static_cast<int>(r.right)/5);}
     void hover(int x,int y) {
+        if(x>=0&&y>=0){lastHoverX=x;lastHoverY=y;pointerInHost=true;hoverSuppressed=false;}
         EnableWindow(GetDlgItem(dialog,IDC_FULLSCREEN_READER),can(2));
         RECT r{};GetClientRect(host,&r);int edge=edgeWidth(),top=MulDiv(40,GetDpiForWindow(dialog),96);
         bool dark=usesDarkTheme(dialog);
@@ -430,7 +436,7 @@ struct Reader::Impl:std::enable_shared_from_this<Reader::Impl> {
         else if(epub){resources=result->resources;available=resources!=nullptr;if(available&&opening)startWeb();else if(!available)failure();}
         else if(result->bitmap){if(bitmap)DeleteObject(bitmap);bitmap=result->bitmap;result->bitmap=nullptr;page=result->page;atEnd=page+1>=pages;active=page>0;RECT r{};GetClientRect(host,&r);renderedWidth=r.right;renderedHeight=r.bottom;show();focusContent(host);InvalidateRect(host,nullptr,TRUE);}
         else failure();
-        hover(-1,-1);
+        refreshHover();
     }
     void cancelWork(){
         {std::lock_guard lock(work->mutex);work->version=++generation;work->pending=false;work->rtf=false;work->release=true;work->result.reset();work->extracted.reset();work->converted.reset();}
@@ -547,10 +553,10 @@ void Reader::Impl::configureWeb() {
         else if(message==L"ready"){KillTimer(self->host,2);self->endLoading();self->opening=false;self->active=true;self->show();if(IsWindowVisible(self->dialog)&&!IsIconic(self->dialog))self->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);}
         else if(message.starts_with(L"done:")||message.starts_with(L"failed:")){
             auto split=message.find(L':');wchar_t* end=nullptr;auto id=wcstoull(message.c_str()+split+1,&end,10);
-            if(end&&!*end&&self->loading&&id==self->activity.identity){if(message.starts_with(L"failed:")){if(self->html||self->docx)self->formattedFailure();else self->failure();}else{self->endLoading();self->hover(-1,-1);}}
+            if(end&&!*end&&self->loading&&id==self->activity.identity){if(message.starts_with(L"failed:")){if(self->html||self->docx)self->formattedFailure();else self->failure();}else{self->endLoading();self->refreshHover();}}
         }
         else if(message==L"error"){if(self->html||self->docx)self->formattedFailure();else self->failure();}
-        else if(message.size()==8&&message.starts_with(L"state:")){self->atStart=message[6]==L'1';self->atEnd=message[7]==L'1';self->hover(-1,-1);}
+        else if(message.size()==8&&message.starts_with(L"state:")){self->atStart=message[6]==L'1';self->atEnd=message[7]==L'1';self->refreshHover();}
         else if(message.starts_with(L"pointer:")){int x=0,y=0;if(swscanf_s(message.c_str()+8,L"%d,%d",&x,&y)==2)self->hover(MulDiv(x,GetDpiForWindow(self->dialog),96),MulDiv(y,GetDpiForWindow(self->dialog),96));}
         else if(message==L"key:ArrowLeft")self->navigate(-1);
         else if(message==L"key:ArrowRight")self->navigate(1);

@@ -103,7 +103,7 @@ int wmain(int argc,wchar_t** argv) {
     SendMessageW(reader->cover,WM_KEYDOWN,VK_TAB,0);if(GetFocus()!=reader->buttons[1])std::cerr<<"Focus diagnostic: id="<<GetDlgCtrlID(GetFocus())<<" shift="<<GetKeyState(VK_SHIFT)<<" next="<<reader->can(1)<<" visible="<<IsWindowVisible(reader->buttons[1])<<" enabled="<<IsWindowEnabled(reader->buttons[1])<<"\n";CHECK(GetFocus()==reader->buttons[1]);SetFocus(reader->cover);
     RECT preview{};GetClientRect(reader->host,&preview);
     CHECK(!reader->active&&reader->can(1));reader->hover(preview.right-1,100);CHECK(IsWindowVisible(reader->buttons[1]));reader->hover(-1,-1);CHECK(!IsWindowVisible(reader->buttons[1]));
-    SendMessageW(reader->buttons[1],BM_CLICK,0,0);CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->active&&reader->page==1);
+    SendMessageW(reader->buttons[1],BM_CLICK,0,0);CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->active&&reader->page==1);CHECK(IsWindowVisible(reader->buttons[1]));
     RECT before{};GetWindowRect(window,&before);auto style=GetWindowLongPtrW(window,GWL_STYLE);
     SendMessageW(reader->buttons[2],BM_CLICK,0,0);CHECK(state.fullscreen);CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->page==1);
     CHECK(IsWindowVisible(reader->fullscreenNotice));CHECK(GetFocus()!=reader->fullscreenNotice);
@@ -163,7 +163,9 @@ int wmain(int argc,wchar_t** argv) {
         CHECK(waitFor([&]{return !reader->loading;}));
         CHECK(waitFor([&]{return script(reader->web.Get(),L"Math.abs(rendition.manager._stageSize.width - innerWidth) < 1")==L"true";}));
         capture(reader->web.Get(),L"reader-fullscreen.png");
-        books::toggleFullscreen(window,state);CHECK(waitFor([&]{return !reader->loading;}));CHECK(waitFor([&]{return script(reader->web.Get(),L"Math.abs(rendition.manager._stageSize.width - innerWidth) < 1")==L"true";}));CHECK(script(reader->web.Get(),L"anchorCfi")==anchor);
+        books::toggleFullscreen(window,state);CHECK(waitFor([&]{return !reader->loading;}));CHECK(waitFor([&]{return script(reader->web.Get(),L"Math.abs(rendition.manager._stageSize.width - innerWidth) < 1")==L"true";}));CHECK(script(reader->web.Get(),L"anchorCfi")==anchor);CHECK(IsWindowVisible(reader->buttons[1]));
+        auto browseWidth=script(reader->web.Get(),L"innerWidth");
+        SendMessageW(reader->buttons[1],BM_CLICK,0,0);CHECK(waitFor([&]{return !reader->loading;}));CHECK(script(reader->web.Get(),L"innerWidth")==browseWidth);
         for(int i=0;i<150&&!reader->atEnd;++i){auto previous=script(reader->web.Get(),L"locationCfi");reader->navigate(1);CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->atEnd||script(reader->web.Get(),L"locationCfi")!=previous);}
         CHECK(reader->atEnd&&!reader->can(1));CHECK(script(reader->web.Get(),L"document.querySelector('iframe').contentDocument.body.textContent").find(L"Second chapter")!=std::wstring::npos);
     }
