@@ -163,7 +163,11 @@ int wmain(int argc,wchar_t** argv) {
         CHECK(waitFor([&]{return !reader->loading;}));
         CHECK(waitFor([&]{return script(reader->web.Get(),L"Math.abs(rendition.manager._stageSize.width - innerWidth) < 1")==L"true";}));
         capture(reader->web.Get(),L"reader-fullscreen.png");
-        books::toggleFullscreen(window,state);CHECK(waitFor([&]{return !reader->loading;}));CHECK(waitFor([&]{return script(reader->web.Get(),L"Math.abs(rendition.manager._stageSize.width - innerWidth) < 1")==L"true";}));CHECK(script(reader->web.Get(),L"anchorCfi")==anchor);CHECK(IsWindowVisible(reader->buttons[1]));
+        books::toggleFullscreen(window,state);CHECK(waitFor([&]{return !reader->loading;}));CHECK(waitFor([&]{return script(reader->web.Get(),L"Math.abs(rendition.manager._stageSize.width - innerWidth) < 1")==L"true";}));CHECK(script(reader->web.Get(),L"anchorCfi")==anchor);
+        // Leaving fullscreen can move the native pointer outside the restored host.
+        // Re-establish the tested right-edge hover state before checking the control.
+        RECT restored{};GetClientRect(reader->host,&restored);reader->hover(restored.right-2,restored.bottom/2);
+        CHECK(IsWindowVisible(reader->buttons[1]));
         auto browseWidth=script(reader->web.Get(),L"innerWidth");
         SendMessageW(reader->buttons[1],BM_CLICK,0,0);CHECK(waitFor([&]{return !reader->loading;}));CHECK(script(reader->web.Get(),L"innerWidth")==browseWidth);
         for(int i=0;i<150&&!reader->atEnd;++i){auto previous=script(reader->web.Get(),L"locationCfi");reader->navigate(1);CHECK(waitFor([&]{return !reader->loading;}));CHECK(reader->atEnd||script(reader->web.Get(),L"locationCfi")!=previous);}
