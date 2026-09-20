@@ -86,7 +86,7 @@ void installApp() {
         if(!DeleteFileW(link.c_str()) && GetLastError()!=ERROR_FILE_NOT_FOUND)
             throw std::runtime_error("Could not replace the previous Start menu shortcut.");
     }
-    reg(UninstallKey, L"DisplayName", L"Voltura Books"); reg(UninstallKey, L"DisplayVersion", L"0.1.4");
+    reg(UninstallKey, L"DisplayName", L"Voltura Books"); reg(UninstallKey, L"DisplayVersion", L"0.1.5");
     reg(UninstallKey, L"Publisher", L"Voltura AB"); reg(UninstallKey, L"InstallLocation", destination.wstring());
     reg(UninstallKey, L"UninstallString", quoted + L" --uninstall");
     reg(UninstallKey, L"DisplayIcon", quoted + L",0");

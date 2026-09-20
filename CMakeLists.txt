@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(VolturaBooks VERSION 0.1.4 LANGUAGES C CXX RC)
+project(VolturaBooks VERSION 0.1.5 LANGUAGES C CXX RC)
 configure_file(src/version.h.in generated/books_version.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/generated)
 if(NOT WIN32)
