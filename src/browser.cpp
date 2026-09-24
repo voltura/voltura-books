@@ -31,6 +31,19 @@ constexpr UINT BrowseFolderRequest=WM_APP+23;
 constexpr UINT SubfolderScanReady=WM_APP+24;
 constexpr UINT GridSelectionChanged=WM_APP+25;
 constexpr int MaximumSelection=100;
+constexpr unsigned AnchorRight=1,AnchorBottom=2,GrowWidth=4,GrowHeight=8;
+struct LayoutControl { int id; unsigned flags; };
+constexpr std::array<LayoutControl,18> LayoutControls{{
+    {IDC_REFRESH,AnchorRight},{IDC_FOLDER,AnchorRight},{IDC_FILENAME,AnchorRight},
+    {IDC_FULLSCREEN_READER,AnchorRight|AnchorBottom},{IDC_DOWNLOAD_VIEW,AnchorRight|AnchorBottom},
+    {IDC_OPEN_FILE,AnchorRight|AnchorBottom},{IDC_OPEN_FOLDER,AnchorRight|AnchorBottom},
+    {IDC_COPY_PATH,AnchorRight|AnchorBottom},{IDC_SCAN_STATUS,AnchorRight|AnchorBottom},
+    {IDOK,AnchorRight|AnchorBottom},{IDCANCEL,AnchorRight|AnchorBottom},
+    {IDC_FILE_COUNT,AnchorBottom},{IDC_BROWSER_HELP,AnchorBottom},
+    {IDC_FILE_LIST,GrowHeight},{IDC_FILE_GRID,GrowHeight},{IDC_BOOK_SCROLL,GrowHeight},
+    {IDC_PANEL_DIVIDER,GrowHeight},
+    {IDC_COVER,GrowWidth|GrowHeight}
+}};
 HWND activeBrowser=nullptr;
 constexpr const wchar_t* GroupNames[]={L"EPUB",L"PDF",L"RTF",L"TXT",L"HTML",L"Word",L"Images"};
 int groupOf(const fs::path& file) {
@@ -86,6 +99,13 @@ struct Browser {
     WINDOWPLACEMENT placement{sizeof(WINDOWPLACEMENT)};
     LONG_PTR windowStyle=0,windowExStyle=0;
     UINT savedDpi=96;
+    SIZE initialClientSize{};
+    UINT layoutDpi=96;
+    std::array<RECT,LayoutControls.size()> initialBounds{};
+    bool layoutReady=false;
+    bool resizing=false;
+    bool draggingDivider=false;
+    int dividerExtraWidth=0,dragStartX=0,dragStartWidth=0;
     struct ChildPlacement { HWND window; RECT bounds; bool visible; };
     std::vector<ChildPlacement> childPlacements;
     std::vector<fs::path> files,allFiles,directFiles,gridFiles,selected;
@@ -312,6 +332,114 @@ void setView(HWND window,Browser& state,bool tiles) {
     SendDlgItemMessageW(window,IDC_VIEW_THUMBS,BM_SETCHECK,tiles ? BST_CHECKED : BST_UNCHECKED,0);
     rebuildGrid(window,state);
 }
+void captureBrowserLayout(HWND window,Browser& state) {
+    RECT client{}; GetClientRect(window,&client);
+    state.initialClientSize={client.right,client.bottom};
+    state.layoutDpi=GetDpiForWindow(window);
+    for(size_t i=0;i<LayoutControls.size();++i) {
+        auto& bounds=state.initialBounds[i];
+        GetWindowRect(GetDlgItem(window,LayoutControls[i].id),&bounds);
+        MapWindowPoints(nullptr,window,reinterpret_cast<POINT*>(&bounds),2);
+    }
+    state.layoutReady=true;
+}
+int availableDividerWidth(HWND window,const Browser& state) {
+    RECT client{}; GetClientRect(window,&client);
+    return (std::max)(0,static_cast<int>(client.right)-MulDiv(state.initialClientSize.cx,GetDpiForWindow(window),state.layoutDpi));
+}
+int dividerOffset(HWND window,const Browser& state) {
+    if(!IsZoomed(window))return 0;
+    return (std::min)(availableDividerWidth(window,state),MulDiv(state.dividerExtraWidth,GetDpiForWindow(window),state.layoutDpi));
+}
+void layoutBrowser(HWND window,const Browser& state) {
+    if(!state.layoutReady || state.fullscreen || IsIconic(window))return;
+    RECT client{}; GetClientRect(window,&client);
+    const auto dpi=GetDpiForWindow(window);
+    const int extraWidth=client.right-MulDiv(state.initialClientSize.cx,dpi,state.layoutDpi);
+    const int extraHeight=client.bottom-MulDiv(state.initialClientSize.cy,dpi,state.layoutDpi);
+    const int split=dividerOffset(window,state);
+    for(size_t i=0;i<LayoutControls.size();++i) {
+        const auto& original=state.initialBounds[i];
+        const auto [id,flags]=LayoutControls[i];
+        const bool fileView=id==IDC_FILE_LIST||id==IDC_FILE_GRID;
+        const bool moveWithSplit=id==IDC_BOOK_SCROLL||id==IDC_PANEL_DIVIDER||id==IDC_COVER;
+        const int left=MulDiv(original.left,dpi,state.layoutDpi)+((flags&AnchorRight)?extraWidth:0)+(moveWithSplit?split:0);
+        const int top=MulDiv(original.top,dpi,state.layoutDpi)+((flags&AnchorBottom)?extraHeight:0);
+        const int width=MulDiv(original.right-original.left,dpi,state.layoutDpi)+((flags&GrowWidth)?extraWidth:0)+(fileView?split:0)-(id==IDC_COVER?split:0);
+        const int height=MulDiv(original.bottom-original.top,dpi,state.layoutDpi)+((flags&GrowHeight)?extraHeight:0);
+        SetWindowPos(GetDlgItem(window,id),nullptr,left,top,width,height,SWP_NOZORDER|SWP_NOACTIVATE);
+    }
+    updateListScrollbar(GetDlgItem(window,state.tiles?IDC_FILE_GRID:IDC_FILE_LIST),GetDlgItem(window,IDC_BOOK_SCROLL));
+    if(state.reader)state.reader->resize();
+    InvalidateRect(window,nullptr,TRUE);
+}
+void resizePreview(HWND window,Browser& state) {
+    if(state.current.empty() || state.hydrating)return;
+    RECT cover{}; GetClientRect(GetDlgItem(window,IDC_COVER),&cover);
+    {
+        std::lock_guard lock(state.worker->mutex);
+        if(state.worker->path!=state.current || (state.worker->width==cover.right && state.worker->height==cover.bottom))return;
+        ++state.worker->version;
+        state.worker->path=state.current;
+        state.worker->width=cover.right;
+        state.worker->height=cover.bottom;
+        state.worker->hydrate=false;
+        state.worker->pending=true;
+    }
+    state.worker->wake.notify_one();
+}
+LRESULT CALLBACK dividerProc(HWND divider,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR) {
+    auto window=GetParent(divider);
+    auto state=reinterpret_cast<Browser*>(GetWindowLongPtrW(window,DWLP_USER));
+    if(!state)return DefSubclassProc(divider,message,wp,lp);
+    if(message==WM_SETCURSOR && reinterpret_cast<HWND>(wp)==divider && IsZoomed(window) && !state->fullscreen) {
+        SetCursor(LoadCursorW(nullptr,IDC_SIZEWE));return TRUE;
+    }
+    if(message==WM_LBUTTONDOWN && IsZoomed(window) && !state->fullscreen) {
+        POINT point{};GetCursorPos(&point);
+        state->draggingDivider=true;
+        state->dragStartX=point.x;
+        state->dragStartWidth=dividerOffset(window,*state);
+        SetCapture(divider);
+        return 0;
+    }
+    if(message==WM_MOUSEMOVE && state->draggingDivider && GetCapture()==divider) {
+        POINT point{};GetCursorPos(&point);
+        const int width=std::clamp(state->dragStartWidth+static_cast<int>(point.x)-state->dragStartX,0,availableDividerWidth(window,*state));
+        const int adjusted=MulDiv(width,state->layoutDpi,GetDpiForWindow(window));
+        if(adjusted!=state->dividerExtraWidth) {
+            state->dividerExtraWidth=adjusted;
+            layoutBrowser(window,*state);
+        }
+        return 0;
+    }
+    if(message==WM_LBUTTONUP || message==WM_CANCELMODE || message==WM_CAPTURECHANGED) {
+        if(state->draggingDivider) {
+            state->draggingDivider=false;
+            if(GetCapture()==divider)ReleaseCapture();
+            if(!state->fullscreen)resizePreview(window,*state);
+        }
+        if(message!=WM_CAPTURECHANGED)return 0;
+    }
+    if(message==WM_PAINT) {
+        PAINTSTRUCT paint{};auto dc=BeginPaint(divider,&paint);
+        RECT bounds{};GetClientRect(divider,&bounds);
+        FillRect(dc,&bounds,dialogBackground(window));
+        const auto dpi=GetDpiForWindow(window);
+        const int line=(std::max)(1,MulDiv(1,dpi,96));
+        const int dash=(std::max)(3,MulDiv(3,dpi,96));
+        const int step=(std::max)(4,MulDiv(4,dpi,96));
+        auto brush=CreateSolidBrush(usesDarkTheme(window)?RGB(118,118,118):GetSysColor(COLOR_3DSHADOW));
+        for(int i=-1;i<=1;++i) {
+            const int y=(bounds.bottom-step)/2+i*step;
+            RECT mark{(bounds.right-dash)/2,y,(bounds.right+dash)/2,y+line};
+            FillRect(dc,&mark,brush);
+        }
+        DeleteObject(brush);EndPaint(divider,&paint);return 0;
+    }
+    if(message==WM_NCDESTROY)RemoveWindowSubclass(divider,dividerProc,1);
+    return DefSubclassProc(divider,message,wp,lp);
+}
 void styleBrowser(HWND window) {
     RECT search{};GetWindowRect(GetDlgItem(window,IDC_SEARCH),&search);
     MapWindowPoints(nullptr,window,reinterpret_cast<POINT*>(&search),2);
@@ -339,6 +467,7 @@ void styleBrowser(HWND window) {
     GetWindowRect(combo,&sort);
     MapWindowPoints(nullptr,window,reinterpret_cast<POINT*>(&sort),2); MapWindowPoints(nullptr,window,reinterpret_cast<POINT*>(&pill),2);
     SetWindowPos(GetDlgItem(window,IDC_SORT),nullptr,sort.left,pill.top+(pill.bottom-pill.top-(sort.bottom-sort.top))/2,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
+    InvalidateRect(GetDlgItem(window,IDC_PANEL_DIVIDER),nullptr,TRUE);
     InvalidateRect(window,nullptr,TRUE);
 }
 void paintPanels(HWND window) {
@@ -754,11 +883,13 @@ INT_PTR CALLBACK proc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
         if(message==WM_MEASUREITEM && wp==IDC_FILE_LIST) { reinterpret_cast<MEASUREITEMSTRUCT*>(lp)->itemHeight=48; return TRUE; }
         if(message==WM_INITDIALOG) {
             state=reinterpret_cast<Browser*>(lp); SetWindowLongPtrW(window,DWLP_USER,lp); applyTheme(window);
+            captureBrowserLayout(window,*state);
             activeBrowser=window;
             ShowWindow(GetDlgItem(window,IDC_DOWNLOAD_VIEW),SW_HIDE);
             { std::lock_guard lock(state->scanWorker->mutex); state->scanWorker->window=window; }
             SendDlgItemMessageW(window,IDC_INCLUDE_SUBFOLDERS,BM_SETCHECK,BST_UNCHECKED,0);
             for(auto id:{IDC_FILE_LIST,IDC_FILE_GRID})SetWindowSubclass(GetDlgItem(window,id),hoverItemsProc,1,0);
+            SetWindowSubclass(GetDlgItem(window,IDC_PANEL_DIVIDER),dividerProc,1,0);
             state->tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,nullptr,WS_POPUP|TTS_ALWAYSTIP,0,0,0,0,window,nullptr,GetModuleHandleW(nullptr),nullptr);
             SetWindowTheme(state->tooltip,L"",L"");
             TOOLINFOW refreshTool{sizeof(refreshTool)}; refreshTool.uFlags=TTF_IDISHWND|TTF_SUBCLASS;
@@ -794,7 +925,13 @@ INT_PTR CALLBACK proc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
                     auto result=std::make_shared<Preview>();
                     result->downloadRequested=hydrate;
                     if(hydrate)result->downloaded=hydrateFile(path,worker,version);
-                    if(SUCCEEDED(com)&&(result->downloaded||!cloudPlaceholder(path))) { result->cover=loadCover(path,width,height); result->details=loadBookDetails(path); }
+                    if(SUCCEEDED(com)&&(result->downloaded||!cloudPlaceholder(path))) {
+                        auto format=fileFormat(path.extension().wstring());
+                        if(!format || !std::string(format->mime).starts_with("image/")) {
+                            width=(std::min)(width,2048); height=(std::min)(height,2048);
+                        }
+                        result->cover=loadCover(path,width,height); result->details=loadBookDetails(path);
+                    }
                     lock.lock(); if(!worker->stop && worker->version==version) {
                         // Selection changes clear result; a same-selection resize
                         // must not replace a valid preview with a failed decode.
@@ -813,6 +950,16 @@ INT_PTR CALLBACK proc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             return TRUE;
         }
         if(!state) return FALSE;
+        if(message==WM_ENTERSIZEMOVE){state->resizing=true;return TRUE;}
+        if(message==WM_EXITSIZEMOVE){state->resizing=false;resizePreview(window,*state);return TRUE;}
+        if(message==WM_GETMINMAXINFO && state->layoutReady && !state->fullscreen) {
+            RECT frame{},client{}; GetWindowRect(window,&frame); GetClientRect(window,&client);
+            const auto dpi=GetDpiForWindow(window);
+            auto limits=reinterpret_cast<MINMAXINFO*>(lp);
+            limits->ptMinTrackSize.x=(std::max)(limits->ptMinTrackSize.x,MulDiv(state->initialClientSize.cx,dpi,state->layoutDpi)+(frame.right-frame.left)-(client.right-client.left));
+            limits->ptMinTrackSize.y=(std::max)(limits->ptMinTrackSize.y,MulDiv(state->initialClientSize.cy,dpi,state->layoutDpi)+(frame.bottom-frame.top)-(client.bottom-client.top));
+            return TRUE;
+        }
         if(message==BrowseFolderRequest && lp) {
             const auto& folder=*reinterpret_cast<const fs::path*>(lp);
             try { populateFolder(window,*state,folder); }
@@ -846,6 +993,13 @@ INT_PTR CALLBACK proc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
         if(message==WM_DRAWITEM&&wp>=IDC_READER_PREVIOUS&&wp<=IDC_READER_FULLSCREEN&&state->reader){SendMessageW(state->reader->window(),message,wp,lp);return TRUE;}
         if(message==WM_COMMAND&&LOWORD(wp)==IDCANCEL&&state->fullscreen){toggleFullscreen(window,*state);return TRUE;}
         if(message==WM_SIZE&&state->fullscreen&&state->reader){RECT r{};GetClientRect(window,&r);SetWindowPos(GetDlgItem(window,IDC_COVER),nullptr,0,0,r.right,r.bottom,SWP_NOZORDER|SWP_NOACTIVATE);state->reader->resize();return TRUE;}
+        if(message==WM_SIZE){
+            if(state->draggingDivider && !IsZoomed(window) && GetCapture()==GetDlgItem(window,IDC_PANEL_DIVIDER))ReleaseCapture();
+            layoutBrowser(window,*state);
+            InvalidateRect(GetDlgItem(window,IDC_PANEL_DIVIDER),nullptr,TRUE);
+            if(!state->resizing)resizePreview(window,*state);
+            return TRUE;
+        }
         if(message==WM_PAINT&&state->fullscreen){PAINTSTRUCT p{};auto dc=BeginPaint(window,&p);FillRect(dc,&p.rcPaint,panelBackground(window));EndPaint(window,&p);return TRUE;}
         if(message==WM_PAINT) { paintPanels(window); return TRUE; }
         if(message==WM_APP+22 || message==WM_SETTINGCHANGE || message==WM_THEMECHANGED) { styleBrowser(window); styleRefreshTooltip(window,*state); return TRUE; }
@@ -901,7 +1055,7 @@ INT_PTR CALLBACK proc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
         if(message==SubfolderScanReady) { applySubfolderScanUpdates(window,*state); return TRUE; }
         if(message==WM_TIMER && wp==3) { KillTimer(window,3); rebuildGrid(window,*state); return TRUE; }
         if(message==WM_TIMER && wp==4) { InvalidateRect(GetDlgItem(window,IDC_DOWNLOAD_VIEW),nullptr,FALSE); return TRUE; }
-        if(message==WM_DPICHANGED) { if(state->fullscreen){MONITORINFO monitor{sizeof(monitor)};GetMonitorInfoW(MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST),&monitor);SetWindowPos(window,nullptr,monitor.rcMonitor.left,monitor.rcMonitor.top,monitor.rcMonitor.right-monitor.rcMonitor.left,monitor.rcMonitor.bottom-monitor.rcMonitor.top,SWP_NOZORDER|SWP_NOACTIVATE);}else{sizeRows(window);styleBrowser(window);rebuildGrid(window,*state);}if(state->reader)state->reader->resize();return TRUE; }
+        if(message==WM_DPICHANGED) { if(state->fullscreen){MONITORINFO monitor{sizeof(monitor)};GetMonitorInfoW(MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST),&monitor);SetWindowPos(window,nullptr,monitor.rcMonitor.left,monitor.rcMonitor.top,monitor.rcMonitor.right-monitor.rcMonitor.left,monitor.rcMonitor.bottom-monitor.rcMonitor.top,SWP_NOZORDER|SWP_NOACTIVATE);}else{layoutBrowser(window,*state);sizeRows(window);styleBrowser(window);rebuildGrid(window,*state);if(!state->resizing)resizePreview(window,*state);}if(state->reader)state->reader->resize();return TRUE; }
         if(message==WM_COMMAND && LOWORD(wp)==IDC_CLEAR_SEARCH) { SetFocus(GetDlgItem(window,IDC_SEARCH));SetDlgItemTextW(window,IDC_SEARCH,L"");return TRUE; }
         if(message==WM_DRAWITEM && wp==IDC_CLEAR_SEARCH) {
             auto draw=reinterpret_cast<DRAWITEMSTRUCT*>(lp);const bool dark=usesDarkTheme(window);
@@ -968,6 +1122,7 @@ INT_PTR CALLBACK proc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             if(preview&&preview->downloaded){std::lock_guard lock(state->thumbnails->mutex);if(auto found=state->thumbnails->images.find(state->current);found!=state->thumbnails->images.end()){if(found->second)DeleteObject(found->second);state->thumbnails->images.erase(found);}state->thumbnails->pending.erase(state->current);InvalidateRect(GetDlgItem(window,IDC_FILE_GRID),nullptr,FALSE);}
             updateDownloadAction(window,*state);
             InvalidateRect(GetDlgItem(window,IDC_COVER),nullptr,TRUE); InvalidateRect(GetDlgItem(window,IDC_FILENAME),nullptr,TRUE);
+            if(!state->resizing && !state->fullscreen)resizePreview(window,*state);
             if(downloadFailed)themedMessageBox(window,L"OneDrive could not download this file. Check your connection and try again.",L"Voltura Books",MB_OK|MB_ICONERROR);
             return TRUE;
         }
