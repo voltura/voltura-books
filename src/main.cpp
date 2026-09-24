@@ -311,7 +311,10 @@ static void advancedLayout(HWND window, bool expanded) {
     RECT bar{430,0,438,0}; MapDialogRect(window,&bar);
     SetWindowPos(GetDlgItem(window,IDC_SETTINGS_SCROLL),nullptr,bar.left,0,bar.right-bar.left,height-frameHeight,SWP_NOZORDER);
     ShowWindow(GetDlgItem(window,IDC_SETTINGS_SCROLL),static_cast<int>(scroll.nPage)<units.bottom ? SW_SHOW : SW_HIDE);
-    InvalidateRect(window,nullptr,FALSE);
+    // The dialog background paints the settings panels. Hiding/showing the
+    // provider controls can invalidate child windows without repainting the
+    // exposed panel area until some later event (for example a screen capture).
+    RedrawWindow(window,nullptr,nullptr,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW);
 }
 static void paintSettingsPanels(HWND window) {
     PAINTSTRUCT paint{}; auto target=BeginPaint(window,&paint); RECT client{}; GetClientRect(window,&client);
